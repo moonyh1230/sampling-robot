@@ -194,6 +194,7 @@ class RealSenseCamera:
     # def get_options(self):
     def get_data(self):
         self.frameset = self.pipeline.wait_for_frames()
+        self.frameset.keep()
         self.depth_frame = self.frameset.get_depth_frame()
         self.color_frame = self.frameset.get_color_frame()
         self.infrared_frame = self.frameset.first(rs.stream.infrared)

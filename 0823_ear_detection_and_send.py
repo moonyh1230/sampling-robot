@@ -63,6 +63,7 @@ class LandmarkMaker(Thread):
     def run(self):
         _, results = mediapipe_detection(self.color_image, self.face_mesh)
         multi_face_landmarks = results.multi_face_landmarks
+
         try:
             if multi_face_landmarks:
                 face_landmarks = results.multi_face_landmarks[0]
@@ -93,19 +94,32 @@ class LandmarkMaker(Thread):
 
                     points_3d = np.append(points_3d, temporal_3d_point[np.newaxis, :], axis=0)
 
+                # for debug
+                if q.full():
+                    _ = q.get()
+
                 q.put(points_3d.flatten())
                 self.ret = True
 
             else:
+                # for debug
+                if q.full():
+                    _ = q.get()
+
                 q.put(np.zeros((0, 1)))
                 self.ret = False
 
         except RuntimeError:
+            print("thread_RuntimeError")
             self.ret = False
             pass
         except ValueError:
+            print("thread_ValueError")
             self.ret = False
             pass
+
+        finally:
+            self.depth_frame.keep()
 
 
 mp_drawing = mp.solutions.drawing_utils
@@ -142,18 +156,8 @@ def main():
     classes = None  # filter by class: --class 0, or --class 0 2 3
     agnostic_nms = False  # class-agnostic NMS
     augment = False  # augmented inference
-    visualize = False  # visualize features
-    line_thickness = 3  # bounding box thickness (pixels)
-    hide_labels = False  # hide labels
-    hide_conf = False  # hide confidences
     half = False  # use FP16 half-precision inference
-    stride = 32
     device_num = ''  # cuda device, i.e. 0 or 0,1,2,3 or cpu
-    view_img = False  # show results
-    save_crop = False  # save cropped prediction boxes
-    nosave = False  # do not save images/videos
-    update = False  # update all models
-    name = 'exp'  # save results to project/name
 
     # Initialize
     device_type = select_device(device_num)
@@ -199,7 +203,6 @@ def main():
         try:
             while True:
                 reset = False
-                send_obj = np.zeros((0, 6))
 
                 start_time = timeit.default_timer()
                 device.get_data()
@@ -353,15 +356,16 @@ def main():
 
                         swab_visualize = nose_point + proj_vec * 100
 
-                        send_obj[:, 0:3] = nose_point
-                        send_obj[:, 3:6] = -proj_vec
+                        send_obj = np.append(nose_point, -proj_vec)
 
-                        if mean_flag:
-                            mean_temp = np.append(mean_temp, send_obj, axis=0)
-                            print(mean_temp[0])
+                        # print(send_obj)
+
+                        if mean_flag and send_obj.sum != 0:
+                            mean_temp = np.append(mean_temp, send_obj[np.newaxis, :], axis=0)
+                            print(mean_temp[-1])
 
                             if len(mean_temp) > 60:
-                                mean_obj = np.mean(mean_temp, axis=0)
+                                mean_obj = np.mean(mean_temp, axis=0)[np.newaxis, :]
 
                                 trans_vec_temp = np.append(mean_obj[:, 0:3], np.array([[1]]))[np.newaxis, :]
                                 ang_vec_temp = np.append(mean_obj[:, 3:6], np.array([[0]]))[np.newaxis, :]
@@ -369,7 +373,7 @@ def main():
                                 trans_vec_rot = transform_mat @ trans_vec_temp.T
                                 ang_vec_rot = transform_mat @ ang_vec_temp.T
 
-                                udp_send = np.append(trans_vec_rot[:, 0:3], ang_vec_rot[:, 0:3])
+                                udp_send = np.append(trans_vec_rot.T[0, 0:3], ang_vec_rot.T[0, 0:3])
                                 print(udp_send)
 
                                 mean_flag = False
