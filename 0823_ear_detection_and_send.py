@@ -28,11 +28,11 @@ from threading import Thread
 
 q = queue.Queue(maxsize=1)
 
-FILE = Path(__file__).resolve()
-ROOT = FILE.parents[0]  # YOLOv5 root directory
-if str(ROOT) not in sys.path:
-    sys.path.append(str(ROOT))  # add ROOT to PATH
-ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
+# FILE = Path(__file__).resolve()
+# ROOT = FILE.parents[0]  # YOLOv5 root directory
+# if str(ROOT) not in sys.path:
+#     sys.path.append(str(ROOT))  # add ROOT to PATH
+# ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 
 def get_mid_pos(box, depth_frame, intr):
@@ -133,8 +133,8 @@ transform_mat = m_T_o_inv @ c_T_m_inv
 
 
 @torch.no_grad()
-def run():
-    weights = 'ear_0803_2.pt'  # model.pt path(s)
+def main():
+    weights = 'ear_0805.pt'  # model.pt path(s)
     imgsz = 640  # inference size (pixels)
     conf_thres = 0.25  # confidence threshold
     iou_thres = 0.35  # NMS IOU threshold
@@ -189,13 +189,15 @@ def run():
 
     _, device = cameras.popitem()
 
+    mean_temp = np.zeros((0, 6))
+    mean_flag = False
+
     with mp_face_mesh_0.FaceMesh(
             static_image_mode=False,
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5) as face_mesh_0:
         try:
             while True:
-                global w
                 reset = False
                 send_obj = np.zeros((0, 6))
 
@@ -205,12 +207,10 @@ def run():
                 frameset = device.frameset
                 device.get_aligned_frames(frameset, aligned_to_color=True)
 
-                device.frameset.keep()
-
-                frameset = device.depth_to_disparity.process(device.frameset).as_frameset()
-                frameset = device.spatial_filter.process(frameset).as_frameset()
-                frameset = device.temporal_filter.process(frameset).as_frameset()
-                frameset = device.disparity_to_depth.process(frameset).as_frameset()
+                frameset = device.depth_to_disparity.process(device.frameset)
+                frameset = device.spatial_filter.process(frameset)
+                frameset = device.temporal_filter.process(frameset)
+                frameset = device.disparity_to_depth.process(frameset)
                 frameset = device.hole_filling_filter.process(frameset).as_frameset()
 
                 device.frameset = frameset
@@ -251,38 +251,21 @@ def run():
 
                 # Inference
                 t1 = time_sync()
-                pred = model(img_rs0, augment=augment,
-                             visualize=increment_path(save_dir / 'features', mkdir=True) if visualize else False)[0]
+                pred = model(img_rs0, augment=augment)[0]
 
                 # Apply NMS
                 pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
                 t2 = time_sync()
 
-                # Apply Classifier
-                if classify:
-                    pred = apply_classifier(pred, modelc, img_rs0, img_raw)
-
                 # Process detections
                 for i, det in enumerate(pred):  # detections per image
-                    s = f'{i}: '
-                    s += '%gx%g ' % img_rs0.shape[2:]  # print string
-                    annotator = Annotator(img_raw, line_width=line_thickness, example=str(names))
                     if len(det):
                         # Rescale boxes from img_size to im0 size
                         det[:, :4] = scale_coords(img_rs0.shape[2:], det[:, :4], img_raw.shape).round()
 
-                        # Print results
-                        for c in det[:, -1].unique():
-                            n = (det[:, -1] == c).sum()  # detections per class
-                            s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
-
                         for *xyxy, conf, cls in reversed(det):
                             mid_pos = get_mid_pos(xyxy, device.depth_frame, device.color_intrinsics)
                             # print(mid_pos[2] * 1000)
-                            c = int(cls)  # integer class
-                            # label = None if hide_labels else (
-                            #     names[c] if hide_conf else f'{names[c]} {mid_pos[2] * 1000:.2f}')
-                            # annotator.box_label(xyxy, label, color=colors(c, True))
 
                             ears = np.array(mid_pos)
 
@@ -371,7 +354,25 @@ def run():
                         swab_visualize = nose_point + proj_vec * 100
 
                         send_obj[:, 0:3] = nose_point
-                        send_obj[:, 3:6] = proj_vec
+                        send_obj[:, 3:6] = -proj_vec
+
+                        if mean_flag:
+                            mean_temp = np.append(mean_temp, send_obj, axis=0)
+                            print(mean_temp[0])
+
+                            if len(mean_temp) > 60:
+                                mean_obj = np.mean(mean_temp, axis=0)
+
+                                trans_vec_temp = np.append(mean_obj[:, 0:3], np.array([[1]]))[np.newaxis, :]
+                                ang_vec_temp = np.append(mean_obj[:, 3:6], np.array([[0]]))[np.newaxis, :]
+
+                                trans_vec_rot = transform_mat @ trans_vec_temp.T
+                                ang_vec_rot = transform_mat @ ang_vec_temp.T
+
+                                udp_send = np.append(trans_vec_rot[:, 0:3], ang_vec_rot[:, 0:3])
+                                print(udp_send)
+
+                                mean_flag = False
 
                         swab_point_0 = rs.rs2_project_point_to_pixel(device.color_intrinsics, nose_point)
                         swab_point_1 = rs.rs2_project_point_to_pixel(device.color_intrinsics, swab_visualize)
@@ -393,7 +394,7 @@ def run():
                 arm_pos = np.array([550, 240, 0, 1])
 
                 rel_arm_pos = np.linalg.inv(transform_mat) @ arm_pos[:, np.newaxis]
-                rel_arm_pixel = rs.rs2_project_point_to_pixel(device.color_intrinsics, rel_arm_pos.T[0][0:3])
+                rel_arm_pixel = rs.rs2_project_point_to_pixel(device.color_intrinsics, rel_arm_pos.T[:, 0:3][0])
 
                 resized_image = cv2.circle(resized_image, list(map(int, rel_arm_pixel)), 3, (255, 255, 255), -1)
 
@@ -409,15 +410,12 @@ def run():
                     break
 
                 if key & 0xFF == ord('s'):
-                    present_time = datetime.now()
-                    img_name = 'mesh_calc_{}{}{}{}.png'.format(present_time.month, present_time.day, present_time.hour,
-                                                               present_time.minute)
-                    cv2.imwrite(img_name, resized_image)
-                    print("Save")
+                    if not mean_flag:
+                        mean_flag = True
 
         finally:
             device.stop()
 
 
 if __name__ == '__main__':
-    run()
+    main()
