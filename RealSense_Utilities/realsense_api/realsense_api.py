@@ -56,9 +56,10 @@ class RealSenseCamera:
                  depth_stream_width=848, depth_stream_height=480,
                  color_stream_width=640, color_stream_height=480,
                  depth_stream_fps=90, color_stream_fps=60,
-                 device=None, adv_mode_flag=False):
+                 device=None, adv_mode_flag=False, device_type='d455'):
 
         self.device = device
+        self.device_type = device_type
 
         self.colored_depthmap = None
         self.color_image = None
@@ -164,7 +165,10 @@ class RealSenseCamera:
         self.disparity_to_depth = rs.disparity_transform(False)
 
         # json profile
-        self.jsonObj = json.load(open("./d455_0321.json"))
+        if self.device_type == 'd455':
+            self.jsonObj = json.load(open("./d455_0321.json"))
+        elif self.device_type == 'd405':
+            self.jsonObj = json.load(open("./d405_0321.json"))
 
         self.pipeline = rs.pipeline()
         config = rs.config()

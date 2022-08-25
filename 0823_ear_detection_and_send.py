@@ -12,6 +12,7 @@ import pyrealsense2 as rs
 import torch
 import torch.backends.cudnn as cudnn
 import timeit
+import pandas as pd
 from datetime import datetime
 from pathlib import Path
 from models.experimental import attempt_load
@@ -137,7 +138,7 @@ calibration_path = "transform.npz"
 with np.load(calibration_path) as cal:
     rot_mat, trans_vec = [cal[i] for i in ('rot', 'trans')]
 
-m_T_o_inv = np.array([[-1, 0, 0, 780], [0, -1, 0, h - 946.3], [0, 0, -1, w], [0, 0, 0, 1]])
+m_T_o_inv = np.array([[-1, 0, 0, 780], [0, -1, 0, -73.7], [0, 0, -1, w], [0, 0, 0, 1]])
 c_T_m_inv = np.zeros((4, 4))
 c_T_m_inv[0:3, 0:3] = rot_mat.T
 c_T_m_inv[0:3, 3] = -rot_mat.T @ trans_vec
@@ -365,6 +366,32 @@ def main():
                             print(mean_temp[-1])
 
                             if len(mean_temp) > 60:
+                                # for jitter test
+                                present_time = datetime.now()
+                                if len(str(present_time.month)) == 1:
+                                    month = '0' + str(present_time.month)
+                                else:
+                                    month = str(present_time.month)
+
+                                if len(str(present_time.day)) == 1:
+                                    day = '0' + str(present_time.day)
+                                else:
+                                    day = str(present_time.day)
+
+                                if len(str(present_time.hour)) == 1:
+                                    hour = '0' + str(present_time.hour)
+                                else:
+                                    hour = str(present_time.hour)
+
+                                if len(str(present_time.minute)) == 1:
+                                    minute = '0' + str(present_time.minute)
+                                else:
+                                    minute = str(present_time.minute)
+
+                                pd.DataFrame(mean_temp).to_csv("./jittering_test/{}_jittter_test.csv".format(
+                                    month + day + hour + minute)
+                                )
+
                                 mean_obj = np.mean(mean_temp, axis=0)[np.newaxis, :]
 
                                 trans_vec_temp = np.append(mean_obj[:, 0:3], np.array([[1]]))[np.newaxis, :]

@@ -6,3 +6,6 @@ __pycache__/
 *.asv
 test/
 options.txt
+jittering_test/
+transform.npz
+*.pt
