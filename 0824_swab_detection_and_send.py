@@ -9,6 +9,7 @@ import torch
 import torch.backends.cudnn as cudnn
 import timeit
 import math
+import struct
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +22,7 @@ from utils.torch_utils import load_classifier, select_device, time_sync
 from RealSense_Utilities.realsense_api.realsense_api import RealSenseCamera
 from RealSense_Utilities.realsense_api.realsense_api import find_realsense
 from RealSense_Utilities.realsense_api.realsense_api import frame_to_np_array
+from Sampling_Socket import SocketClass
 
 
 # FILE = Path(__file__).resolve()
@@ -43,6 +45,12 @@ def convert_depth_to_phys_coord(xp, yp, depth, intr):
     result = rs.rs2_deproject_pixel_to_point(intr, [int(xp), int(yp)], depth)
 
     return result[0], result[1], result[2]
+
+
+def get_swab_pos(stroke):
+    swab_pos = np.array([0, 58.14, 332.5 + stroke])
+
+    return swab_pos
 
 
 frame_height, frame_width, channels = (480, 640, 3)
@@ -110,6 +118,10 @@ def main():
 
     mean_temp = np.zeros((0, 6))
     mean_flag = False
+
+    sock = SocketClass("Client_Swab")
+    server_ip = "127.0.0.1"
+    server_port = 7000
 
     try:
         while True:
@@ -200,6 +212,12 @@ def main():
                                             ideal_camera_z - swabs[2] * 1000]]
                                           )
 
+                        list_offset = offset[0].tolist()
+
+                        send_msg = struct.pack("fff", list_offset[0], list_offset[1], list_offset[2])
+
+                        sock.send_messages(send_msg, server_ip, server_port)
+
                         text = "offset x:{:.3f} y:{:.3f} z:{:.3f}".format(offset[0][0], offset[0][1], offset[0][2])
 
                         if np.linalg.norm(offset) > 40:
@@ -237,6 +255,7 @@ def main():
 
     finally:
         device.stop()
+        sock.close_socket()
 
 
 if __name__ == '__main__':
