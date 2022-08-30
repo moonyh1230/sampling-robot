@@ -76,7 +76,7 @@ class LandmarkMaker(Thread):
                     pixel_x = int(pixel_point.x * frame_width)
                     pixel_y = int(pixel_point.y * frame_height)
 
-                    if i == 4 or i == 9 or i == 152:
+                    if i == 4 or i == 9 or i == 200:
                         _ = cv2.circle(self.color_image, (pixel_x, pixel_y), 2, (0, 0, 0), -1)
                     # elif i == 93:
                     #     color_image = cv2.circle(color_image, (pixel_x, pixel_y), 5, (0, 0, 255), -1)
@@ -149,10 +149,10 @@ transform_mat = m_T_o_inv @ c_T_m_inv
 
 @torch.no_grad()
 def main():
-    weights = 'ear_0805.pt'  # model.pt path(s)
+    weights = 'ear_0829_x.pt'  # model.pt path(s)
     imgsz = 640  # inference size (pixels)
     conf_thres = 0.25  # confidence threshold
-    iou_thres = 0.35  # NMS IOU threshold
+    iou_thres = 0.15  # NMS IOU threshold
     max_det = 1  # maximum detections per image
     classes = None  # filter by class: --class 0, or --class 0 2 3
     agnostic_nms = False  # class-agnostic NMS
@@ -197,6 +197,8 @@ def main():
     mean_temp = np.zeros((0, 6))
     mean_flag = False
 
+    jitter_count = 0
+
     with mp_face_mesh_0.FaceMesh(
             static_image_mode=False,
             min_detection_confidence=0.5,
@@ -204,6 +206,7 @@ def main():
         try:
             while True:
                 reset = False
+                ears = np.zeros((0, 3))
 
                 start_time = timeit.default_timer()
                 device.get_data()
@@ -291,6 +294,8 @@ def main():
                         resized_image = cv2.resize(img_raw, dsize=(0, 0), fx=1, fy=1,
                                                    interpolation=cv2.INTER_AREA)
 
+                        resized_image = cv2.rotate(resized_image.copy(), cv2.ROTATE_90_CLOCKWISE)
+
                         # Show images from both cameras
                         cv2.namedWindow('RealSense_front', cv2.WINDOW_NORMAL)
                         cv2.resizeWindow('RealSense_front', resized_image.shape[1], resized_image.shape[0])
@@ -325,13 +330,12 @@ def main():
                                           x_reshaped[79], x_reshaped[166], x_reshaped[238]],
                                          axis=0)
 
-                    vec_no_9 = x_reshaped[9]
-                    vec_no_152 = x_reshaped[152]
                     try:
                         if ears.sum() == 0:
                             raise ValueError
                         else:
-                            vec_ear = ears
+                            vec_ear = ears * 1000
+                            ear_pixel = rs.rs2_project_point_to_pixel(device.color_intrinsics, vec_ear)
 
                     except ValueError as e:
                         print(e, ": successfully detecting ears but can't find ear's position")
@@ -341,9 +345,11 @@ def main():
                         print("didn't detect ears")
                         continue
 
+                    vec_no_9 = x_reshaped[9]
+                    vec_no_200 = x_reshaped[200]
                     vec_no_4 = x_reshaped[4]
 
-                    plane_norm_vec = np.cross((vec_no_152 - vec_no_4), (vec_no_9 - vec_no_4))
+                    plane_norm_vec = np.cross((vec_no_200 - vec_no_4), (vec_no_9 - vec_no_4))
                     plane_norm_unit_vec = plane_norm_vec / np.linalg.norm(plane_norm_vec)
 
                     if plane_norm_unit_vec[2] <= 0:
@@ -363,9 +369,9 @@ def main():
 
                         if mean_flag and send_obj.sum != 0:
                             mean_temp = np.append(mean_temp, send_obj[np.newaxis, :], axis=0)
-                            print(mean_temp[-1])
+                            # print(mean_temp[-1])
 
-                            if len(mean_temp) > 60:
+                            if len(mean_temp) > 100:
                                 # for jitter test
                                 present_time = datetime.now()
                                 if len(str(present_time.month)) == 1:
@@ -388,8 +394,8 @@ def main():
                                 else:
                                     minute = str(present_time.minute)
 
-                                pd.DataFrame(mean_temp).to_csv("./jittering_test/{}_jittter_test.csv".format(
-                                    month + day + hour + minute)
+                                pd.DataFrame(mean_temp).to_csv("./jittering_test/{}_jittter_test_{}.csv".format(
+                                    month + day + hour + minute, jitter_count)
                                 )
 
                                 mean_obj = np.mean(mean_temp, axis=0)[np.newaxis, :]
@@ -401,14 +407,20 @@ def main():
                                 ang_vec_rot = transform_mat @ ang_vec_temp.T
 
                                 udp_send = np.append(trans_vec_rot.T[0, 0:3], ang_vec_rot.T[0, 0:3])
-                                print(udp_send)
+                                # print(udp_send)
 
                                 mean_flag = False
+                                mean_temp = np.zeros((0, 6))
+
+                                print("test {} complete and data saved".format(jitter_count))
+                                jitter_count += 1
 
                         swab_point_0 = rs.rs2_project_point_to_pixel(device.color_intrinsics, nose_point)
                         swab_point_1 = rs.rs2_project_point_to_pixel(device.color_intrinsics, swab_visualize)
 
                         img_circle = cv2.circle(img_raw.copy(), list(map(int, swab_point_0)), 2, (255, 0, 0), -1)
+
+                        img_circle = cv2.circle(img_circle.copy(), list(map(int, ear_pixel)), 2, (255, 0, 0), -1)
 
                         img_disp = cv2.line(img_circle.copy(), list(map(int, swab_point_0)),
                                             list(map(int, swab_point_1)),
@@ -428,6 +440,8 @@ def main():
                 rel_arm_pixel = rs.rs2_project_point_to_pixel(device.color_intrinsics, rel_arm_pos.T[:, 0:3][0])
 
                 resized_image = cv2.circle(resized_image, list(map(int, rel_arm_pixel)), 3, (255, 255, 255), -1)
+
+                resized_image = cv2.rotate(resized_image.copy(), cv2.ROTATE_90_CLOCKWISE)
 
                 # Show images from both cameras
                 cv2.namedWindow('RealSense_front', cv2.WINDOW_NORMAL)

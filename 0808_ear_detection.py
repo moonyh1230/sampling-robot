@@ -127,7 +127,7 @@ with np.load(calibration_path) as cal:
 
 @torch.no_grad()
 def run():
-    weights = 'ear_0805.pt'  # model.pt path(s)
+    weights = 'ear_0829_x.pt'  # model.pt path(s)
     imgsz = 640  # inference size (pixels)
     conf_thres = 0.25  # confidence threshold
     iou_thres = 0.35  # NMS IOU threshold
@@ -269,9 +269,9 @@ def run():
                             mid_pos = get_mid_pos(xyxy, device.depth_frame, device.color_intrinsics)
                             # print(mid_pos[2] * 1000)
                             c = int(cls)  # integer class
-                            # label = None if hide_labels else (
-                            #     names[c] if hide_conf else f'{names[c]} {mid_pos[2] * 1000:.2f}')
-                            # annotator.box_label(xyxy, label, color=colors(c, True))
+                            label = None if hide_labels else (
+                                names[c] if hide_conf else f'{names[c]} {mid_pos[2] * 1000:.2f}')
+                            annotator.box_label(xyxy, label, color=colors(c, True))
 
                             ears = np.array(mid_pos)
 
