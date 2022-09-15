@@ -9,3 +9,4 @@ options.txt
 jittering_test/
 transform.npz
 *.pt
+.cnn_temp/
