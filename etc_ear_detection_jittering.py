@@ -377,6 +377,32 @@ def main():
                             # print(mean_temp[-1])
 
                             if len(mean_temp) > 100:
+                                # for jitter test
+                                present_time = datetime.now()
+                                if len(str(present_time.month)) == 1:
+                                    month = '0' + str(present_time.month)
+                                else:
+                                    month = str(present_time.month)
+
+                                if len(str(present_time.day)) == 1:
+                                    day = '0' + str(present_time.day)
+                                else:
+                                    day = str(present_time.day)
+
+                                if len(str(present_time.hour)) == 1:
+                                    hour = '0' + str(present_time.hour)
+                                else:
+                                    hour = str(present_time.hour)
+
+                                if len(str(present_time.minute)) == 1:
+                                    minute = '0' + str(present_time.minute)
+                                else:
+                                    minute = str(present_time.minute)
+
+                                pd.DataFrame(mean_temp).to_csv("./jittering_test/{}_jittter_test_{}.csv".format(
+                                    month + day + hour + minute, jitter_count)
+                                )
+
                                 mean_obj = np.mean(mean_temp, axis=0)[np.newaxis, :]
 
                                 trans_vec_temp = np.append(mean_obj[:, 0:314], np.array([[1]]))[np.newaxis, :]

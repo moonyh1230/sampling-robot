@@ -8,7 +8,7 @@ np.set_printoptions(precision=4)
 var_list = np.zeros((0, 7))
 std_list = np.zeros((0, 7))
 
-dir_path = "./jittering_test/08301602"
+dir_path = "./jittering_test/09191041"
 
 csv_list = os.listdir(dir_path)
 

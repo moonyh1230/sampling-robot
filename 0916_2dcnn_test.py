@@ -20,12 +20,13 @@ def make_dataset(idata, odata):
     for k in range(data_length):
         if k == data_length:
             break
-        x_ = idata[k:k + 1, :]
+        # x_ = idata[k:k + 1, :]
+        x_ = idata[k]
         y_ = odata[k]
         # x = X[:, i:i + 1]
         # y = Y[i]
 
-        x_list.append(x_.T)
+        x_list.append(x_)
         y_list.append(y_)
 
     return np.array(x_list), np.array(y_list)
@@ -58,14 +59,17 @@ for i in dataset_list:
 # x = x.reshape(x.shape[0], x.shape[1], 1)
 # print(x.shape)
 
-input_scaler = MinMaxScaler((0, 1))
-output_scaler = MinMaxScaler((0, 1))
+input_scaler = MinMaxScaler((-1, 1))
+output_scaler = MinMaxScaler((-1, 1))
 
 xtrain, xtest, ytrain, ytest = train_test_split(x, y, test_size=0.15)
 
 input_scaler.fit(xtrain)
 xtrain = input_scaler.transform(xtrain)
 xtest = input_scaler.transform(xtest)
+
+xtrain = xtrain.reshape(xtrain.shape[0], 468, 3)
+xtest = xtest.reshape(xtest.shape[0], 468, 3)
 
 output_scaler.fit(ytrain)
 ytrain = output_scaler.transform(ytrain)
@@ -76,10 +80,10 @@ ts_testx, ts_testy = make_dataset(xtest, ytest)
 
 es = EarlyStopping(monitor='loss', mode='min', verbose=1, patience=30)
 
-opti = Adam(learning_rate=0.001)
+opti = Adam(learning_rate=0.0005)
 
 model = Sequential()
-model.add(Conv1D(filters=32, kernel_size=2, activation="relu", padding="same", input_shape=(1404, 1)))
+model.add(Conv1D(filters=32, kernel_size=2, activation="relu", padding="same", input_shape=(468, 3)))
 model.add(Conv1D(filters=32, kernel_size=2, activation="relu", padding="same"))
 model.add(Conv1D(filters=32, kernel_size=2, activation="relu", padding="same"))
 model.add(MaxPooling1D(pool_size=3))
