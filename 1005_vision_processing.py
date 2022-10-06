@@ -204,7 +204,7 @@ class SwabPositionCheck(Thread):
                                           (0, 0, 255), 2)
 
                     if not flag_send and frame_keep == 200:
-                        udp_send = struct.pack("iiffffffc", 1, 1, 0, 0, 0, 0, 0, 0, bytes(";", "utf-8"))
+                        udp_send = struct.pack("iiffffffc", 1, 1, 0, 0, 0, 0, 0, 0, ";")
 
                         self.udp_sender.send_messages(udp_send)
 
@@ -213,7 +213,7 @@ class SwabPositionCheck(Thread):
                 else:
                     if not flag_send and frame_keep == 200:
                         udp_send = struct.pack("iiffffffc", 0, 1, list_offset[0], list_offset[1], list_offset[2], 0, 0,
-                                               0, bytes(";", "utf-8"))
+                                               0, ";")
 
                         self.udp_sender.send_messages(udp_send)
 
@@ -337,8 +337,8 @@ transform_mat = m_T_o_inv @ c_T_m_inv
 UDP_vision_ip = "169.254.84.185"
 UDP_main_ip = "169.254.84.181"
 
-UDP_vision_port = 61456
-UDP_main_port = 61440
+UDP_vision_port = "61456"
+UDP_main_port = "61440"
 
 
 @torch.no_grad()
@@ -346,7 +346,7 @@ def main():
     rs_main = None
     rs_swab = None
     weights_swab = "swab_0801.pt"
-    weights_main = "ear_0829_x.pt"
+    weights_main = "ear_0829_x"
 
     cameras = {}
     realsense_device = find_realsense()
@@ -358,14 +358,14 @@ def main():
         elif serial == '123622270472':
             cameras[serial] = RealSenseCamera(depth_stream_width=640, depth_stream_height=480,
                                               color_stream_width=640, color_stream_height=480,
-                                              color_stream_fps=30, depth_stream_fps=30,
+                                              depth_stream_fps=30,
                                               device=devices, adv_mode_flag=True, device_type="d405")
 
     for ser, dev in cameras.items():
-        if ser == '105322250965':
+        if ser == 'ear':
             rs_main = dev
 
-        elif ser == '123622270472':
+        elif ser == 'swab':
             rs_swab = dev
 
     if rs_main is None or rs_swab is None:
@@ -537,7 +537,7 @@ def main():
                                     udp_send_array = np.append(trans_vec_rot.T[0, 0:3], ang_vec_rot.T[0, 0:3])
                                     udp_send = struct.pack("iiffffffc", 0, 2, udp_send_array[0], udp_send_array[1],
                                                            udp_send_array[2], udp_send_array[3], udp_send_array[4],
-                                                           udp_send_array[5], bytes(";", "utf-8"))
+                                                           udp_send_array[5], ";")
 
                                     print(udp_send)
 
@@ -578,7 +578,7 @@ def main():
 
                     if offset_norm > 50:
                         print("invalid motion detected")
-                        udp_sender.send_messages(struct.pack("iiffffffc", 1, 0, 0, 0, 0, 0, 0, 0, bytes(";", "utf-8")))
+                        udp_sender.send_messages(struct.pack("iiffffffc", 1, 0, 0, 0, 0, 0, 0, 0, ";"))
 
                 face_center_prev = face_center_current
 
