@@ -1,4 +1,5 @@
 import queue
+import struct
 import threading
 
 import cv2
@@ -53,76 +54,10 @@ def convert_depth_to_phys_coord(xp, yp, depth, intr):
     return result[0], result[1], result[2]
 
 
-class LandmarkMaker(Thread):
-    def __init__(self, color_image, face_mesh, depth_frame, color_intrinsics):
-        Thread.__init__(self)
-        self.color_image = color_image
-        self.face_mesh = face_mesh
-        self.depth_frame = depth_frame
-        self.color_intrinsics = color_intrinsics
-        self.img_circled = None
-        self.ret = None
+def get_swab_pos(stroke):
+    swab_pos = np.array([0, 58.14, 332.5 + stroke])
 
-    def run(self):
-        _, results = mediapipe_detection(self.color_image, self.face_mesh)
-        multi_face_landmarks = results.multi_face_landmarks
-
-        try:
-            if multi_face_landmarks:
-                face_landmarks = results.multi_face_landmarks[0]
-
-                points_3d = np.zeros((0, 3))
-
-                for i in range(468):
-                    pixel_point = face_landmarks.landmark[i]
-                    pixel_x = int(pixel_point.x * frame_width)
-                    pixel_y = int(pixel_point.y * frame_height)
-
-                    if i == 4 or i == 9 or i == 200:
-                        _ = cv2.circle(self.color_image, (pixel_x, pixel_y), 2, (0, 0, 0), -1)
-                    # elif i == 93:
-                    #     color_image = cv2.circle(color_image, (pixel_x, pixel_y), 5, (0, 0, 255), -1)
-                    elif i == 6:
-                        _ = cv2.circle(self.color_image, (pixel_x, pixel_y), 2, (0, 0, 255), -1)
-                    # else:
-                    #     color_image = cv2.circle(color_image, (pixel_x, pixel_y), 1, (0, 255, 255), -1)
-
-                    depth = self.depth_frame.get_distance(pixel_x, pixel_y)
-                    if depth == 0:
-                        raise ValueError
-
-                    x, y, z = convert_depth_to_phys_coord(pixel_x, pixel_y, depth, self.color_intrinsics)
-
-                    temporal_3d_point = np.array([x, y, z]) * 1000
-
-                    points_3d = np.append(points_3d, temporal_3d_point[np.newaxis, :], axis=0)
-
-                # for debug
-                if q.full():
-                    _ = q.get()
-
-                q.put(points_3d.flatten())
-                self.ret = True
-
-            else:
-                # for debug
-                if q.full():
-                    _ = q.get()
-
-                q.put(np.zeros((0, 1)))
-                self.ret = False
-
-        except RuntimeError:
-            print("thread_RuntimeError")
-            self.ret = False
-            pass
-        except ValueError:
-            print("thread_ValueError")
-            self.ret = False
-            pass
-
-        finally:
-            self.depth_frame.keep()
+    return swab_pos
 
 
 class InitializeYOLO:
@@ -208,6 +143,174 @@ class InitializeYOLO:
             return None
 
 
+class SwabPositionCheck(Thread):
+    def __init__(self, rs_device: RealSenseCamera, yolo_model: InitializeYOLO, sender: Sender):
+        Thread.__init__(self)
+        self.device = rs_device
+        self.model = yolo_model
+        self.udp_sender = sender
+
+    def run(self):
+        swab_pos = get_swab_pos(0)
+        unit_vec = np.array([0, np.sin(math.pi * 30 / 180), np.cos(math.pi * 30 / 180)])
+        camera_pos = np.array([0, -86.65, 246.95])
+
+        flag_send = False
+        frame_keep = 0
+
+        try:
+            while True:
+                self.device.get_data()
+
+                frameset = self.device.frameset
+                self.device.get_aligned_frames(frameset, aligned_to_color=True)
+
+                frameset = self.device.depth_to_disparity.process(self.device.frameset)
+                frameset = self.device.spatial_filter.process(frameset)
+                frameset = self.device.temporal_filter.process(frameset)
+                frameset = self.device.disparity_to_depth.process(frameset)
+                frameset = self.device.hole_filling_filter.process(frameset).as_frameset()
+
+                self.device.frameset = frameset
+
+                self.device.color_frame = frameset.get_color_frame()
+                self.device.depth_frame = frameset.get_depth_frame()
+
+                self.device.color_image = frame_to_np_array(self.device.color_frame)
+
+                img_rs = np.copy(self.device.color_image)
+                img_raw = np.copy(img_rs)
+
+                ideal_camera_z_vec = np.dot(swab_pos - camera_pos, unit_vec) * unit_vec
+                ideal_camera_y_vec = (swab_pos - camera_pos) - ideal_camera_z_vec
+
+                ideal_camera_y = np.linalg.norm(ideal_camera_y_vec)
+                ideal_camera_z = np.linalg.norm(ideal_camera_z_vec)
+
+                swabs = self.model.detect_from_img(img_rs, self.device)
+
+                offset = np.array([[0 - swabs[1] * 1000,
+                                    ideal_camera_y + swabs[0] * 1000,
+                                    ideal_camera_z - swabs[2] * 1000]]
+                                  )
+
+                list_offset = offset[0].tolist()
+
+                text = "offset x:{:.3f} y:{:.3f} z:{:.3f}".format(offset[0][0], offset[0][1], offset[0][2])
+
+                if np.linalg.norm(offset) > 40:
+                    offset_over = "Need to retry swab gripping. max offset: {:.3f} mm".format(np.max(offset))
+                    img_raw = cv2.putText(img_raw.copy(), offset_over, (10, 60), cv2.FONT_HERSHEY_PLAIN, 0.7,
+                                          (0, 0, 255), 2)
+
+                    if not flag_send and frame_keep == 200:
+                        udp_send = struct.pack("iiffffffc", 1, 1, 0, 0, 0, 0, 0, 0, bytes(";", "utf-8"))
+
+                        self.udp_sender.send_messages(udp_send)
+
+                        flag_send = True
+
+                else:
+                    if not flag_send and frame_keep == 200:
+                        udp_send = struct.pack("iiffffffc", 0, 1, list_offset[0], list_offset[1], list_offset[2], 0, 0,
+                                               0, bytes(";", "utf-8"))
+
+                        self.udp_sender.send_messages(udp_send)
+
+                        flag_send = True
+
+                img_raw = cv2.putText(img_raw.copy(), text, (10, 30), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 0), 2)
+
+                resized_image = cv2.resize(img_raw, dsize=(0, 0), fx=1, fy=1, interpolation=cv2.INTER_AREA)
+
+                # Show images from both cameras
+                cv2.namedWindow('RealSense_swab', cv2.WINDOW_NORMAL)
+                cv2.resizeWindow('RealSense_swab', resized_image.shape[1], resized_image.shape[0])
+                cv2.imshow('RealSense_swab', resized_image)
+
+                cv2.waitKey(1)
+
+                frame_keep += 1
+                if frame_keep > 500:
+                    break
+
+        finally:
+            cv2.destroyWindow('RealSense_swab')
+            self.device.stop()
+
+
+class LandmarkMaker(Thread):
+    def __init__(self, color_image, face_mesh, depth_frame, color_intrinsics):
+        Thread.__init__(self)
+        self.color_image = color_image
+        self.face_mesh = face_mesh
+        self.depth_frame = depth_frame
+        self.color_intrinsics = color_intrinsics
+        self.img_circled = None
+        self.ret = None
+
+    def run(self):
+        _, results = mediapipe_detection(self.color_image, self.face_mesh)
+        multi_face_landmarks = results.multi_face_landmarks
+
+        try:
+            if multi_face_landmarks:
+                face_landmarks = results.multi_face_landmarks[0]
+
+                points_3d = np.zeros((0, 3))
+
+                for i in range(468):
+                    pixel_point = face_landmarks.landmark[i]
+                    pixel_x = int(pixel_point.x * frame_width)
+                    pixel_y = int(pixel_point.y * frame_height)
+
+                    if i == 4 or i == 9 or i == 200:
+                        _ = cv2.circle(self.color_image, (pixel_x, pixel_y), 2, (0, 0, 0), -1)
+                    # elif i == 93:
+                    #     color_image = cv2.circle(color_image, (pixel_x, pixel_y), 5, (0, 0, 255), -1)
+                    elif i == 6:
+                        _ = cv2.circle(self.color_image, (pixel_x, pixel_y), 2, (0, 0, 255), -1)
+                    # else:
+                    #     color_image = cv2.circle(color_image, (pixel_x, pixel_y), 1, (0, 255, 255), -1)
+
+                    depth = self.depth_frame.get_distance(pixel_x, pixel_y)
+                    if depth == 0:
+                        raise ValueError
+
+                    x, y, z = convert_depth_to_phys_coord(pixel_x, pixel_y, depth, self.color_intrinsics)
+
+                    temporal_3d_point = np.array([x, y, z]) * 1000
+
+                    points_3d = np.append(points_3d, temporal_3d_point[np.newaxis, :], axis=0)
+
+                # for debug
+                if q.full():
+                    _ = q.get()
+
+                q.put(points_3d.flatten())
+                self.ret = True
+
+            else:
+                # for debug
+                if q.full():
+                    _ = q.get()
+
+                q.put(np.zeros((0, 1)))
+                self.ret = False
+
+        except RuntimeError:
+            print("thread_RuntimeError")
+            self.ret = False
+            pass
+        except ValueError:
+            print("thread_ValueError")
+            self.ret = False
+            pass
+
+        finally:
+            self.depth_frame.keep()
+
+
 mp_drawing = mp.solutions.drawing_utils
 mp_face_mesh_0 = mp.solutions.face_mesh
 
@@ -231,17 +334,11 @@ c_T_m_inv[3, 0:4] = np.array([0, 0, 0, 1])
 
 transform_mat = m_T_o_inv @ c_T_m_inv
 
-swab_stroke = 138
-
-unit_vec = np.array([0, np.sin(math.pi * 30 / 180), np.cos(math.pi * 30 / 180)])
-camera_pos = np.array([0, -86.65, 246.95])
-swab_pos = np.array([0, 58.14, 332.5 + swab_stroke])
-
-UDP_vision_ip = "192.168.0.1"
+UDP_vision_ip = "169.254.84.185"
 UDP_main_ip = "169.254.84.181"
 
-UDP_vision_port = "61456"
-UDP_main_port = "61440"
+UDP_vision_port = 61456
+UDP_main_port = 61440
 
 
 @torch.no_grad()
@@ -249,26 +346,26 @@ def main():
     rs_main = None
     rs_swab = None
     weights_swab = "swab_0801.pt"
-    weights_main = "ear_0829_x"
+    weights_main = "ear_0829_x.pt"
 
     cameras = {}
     realsense_device = find_realsense()
 
     for serial, devices in realsense_device:
-        if serial == 'ear':
+        if serial == '105322250965':
             cameras[serial] = RealSenseCamera(device=devices, adv_mode_flag=True)
 
-        elif serial == 'swab':
+        elif serial == '123622270472':
             cameras[serial] = RealSenseCamera(depth_stream_width=640, depth_stream_height=480,
                                               color_stream_width=640, color_stream_height=480,
-                                              depth_stream_fps=60,
+                                              color_stream_fps=30, depth_stream_fps=30,
                                               device=devices, adv_mode_flag=True, device_type="d405")
 
     for ser, dev in cameras.items():
-        if ser == 'ear':
+        if ser == '105322250965':
             rs_main = dev
 
-        elif ser == 'swab':
+        elif ser == '123622270472':
             rs_swab = dev
 
     if rs_main is None or rs_swab is None:
@@ -290,13 +387,15 @@ def main():
     yolo_main = InitializeYOLO(weights_path=weights_main)
     yolo_swab = InitializeYOLO(weights_path=weights_swab)
 
+    face_center_prev = None
+
     with mp_face_mesh_0.FaceMesh(
             static_image_mode=False,
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5) as face_mesh_0:
         try:
             while True:
-                if not flag_path_calc:
+                if not flag_path_calc and not flag_swab_check:
                     recv_msg = udp_receiver.get_recv_data()
                     if recv_msg is not None and recv_msg[0] == 0:
                         flag_swab_check = True
@@ -305,7 +404,6 @@ def main():
                         flag_path_calc = True
 
                 reset = False
-                pos_ear = np.zeros((0, 3))
 
                 start_time = timeit.default_timer()
                 rs_main.get_data()
@@ -374,6 +472,9 @@ def main():
                 face_points = q.get()
 
                 if flag_path_calc:
+                    if not mean_flag:
+                        mean_flag = True
+
                     pos_ear = yolo_main.detect_from_img(img_rs0, rs_main)
 
                     if len(face_points) == 1404:
@@ -433,17 +534,22 @@ def main():
                                     trans_vec_rot = transform_mat @ trans_vec_temp.T
                                     ang_vec_rot = transform_mat @ ang_vec_temp.T
 
-                                    udp_send = np.append(trans_vec_rot.T[0, 0:3], ang_vec_rot.T[0, 0:3])
-                                    # print(udp_send)
+                                    udp_send_array = np.append(trans_vec_rot.T[0, 0:3], ang_vec_rot.T[0, 0:3])
+                                    udp_send = struct.pack("iiffffffc", 0, 2, udp_send_array[0], udp_send_array[1],
+                                                           udp_send_array[2], udp_send_array[3], udp_send_array[4],
+                                                           udp_send_array[5], bytes(";", "utf-8"))
+
+                                    print(udp_send)
+
+                                    udp_sender.send_messages(udp_send)
 
                                     mean_flag = False
                                     mean_temp = np.zeros((0, 6))
 
-                                    print("test {} complete and data saved".format(jitter_count))
-                                    jitter_count += 1
+                                    flag_path_calc = False
 
-                            swab_point_0 = rs.rs2_project_point_to_pixel(device.color_intrinsics, nose_point)
-                            swab_point_1 = rs.rs2_project_point_to_pixel(device.color_intrinsics, swab_visualize)
+                            swab_point_0 = rs.rs2_project_point_to_pixel(rs_main.color_intrinsics, nose_point)
+                            swab_point_1 = rs.rs2_project_point_to_pixel(rs_main.color_intrinsics, swab_visualize)
 
                             img_circle = cv2.circle(img_raw.copy(), list(map(int, swab_point_0)), 2, (255, 0, 0), -1)
 
@@ -456,19 +562,39 @@ def main():
                         resized_image = cv2.resize(img_disp, dsize=(0, 0), fx=1, fy=1,
                                                    interpolation=cv2.INTER_AREA)
 
+                elif flag_swab_check:
+                    swab_check_thread = SwabPositionCheck(rs_swab, yolo_swab, udp_sender)
+
+                    swab_check_thread.start()
+                    swab_check_thread.join()
+
+                    flag_swab_check = False
+
+                rearranged_face = face_points.reshape(468, 3)
+                face_center_current = np.average(rearranged_face, axis=0)
+
+                if face_center_prev is not None:
+                    offset_norm = np.linalg.norm(face_center_prev - face_center_current)
+
+                    if offset_norm > 50:
+                        print("invalid motion detected")
+                        udp_sender.send_messages(struct.pack("iiffffffc", 1, 0, 0, 0, 0, 0, 0, 0, bytes(";", "utf-8")))
+
+                face_center_prev = face_center_current
+
                 terminate_time = timeit.default_timer()
 
                 print('FPS:{}\r'.format(1 / (terminate_time - start_time)), end='')
 
                 # for debug
-                arm_pos = np.array([550, 240, 0, 1])
-
-                rel_arm_pos = np.linalg.inv(transform_mat) @ arm_pos[:, np.newaxis]
-                rel_arm_pixel = rs.rs2_project_point_to_pixel(device.color_intrinsics, rel_arm_pos.T[:, 0:3][0])
-
-                resized_image = cv2.circle(resized_image, list(map(int, rel_arm_pixel)), 3, (255, 255, 255), -1)
-
-                resized_image = cv2.rotate(resized_image.copy(), cv2.ROTATE_90_CLOCKWISE)
+                # arm_pos = np.array([550, 240, 0, 1])
+                #
+                # rel_arm_pos = np.linalg.inv(transform_mat) @ arm_pos[:, np.newaxis]
+                # rel_arm_pixel = rs.rs2_project_point_to_pixel(rs_main.color_intrinsics, rel_arm_pos.T[:, 0:3][0])
+                #
+                # resized_image = cv2.circle(resized_image, list(map(int, rel_arm_pixel)), 3, (255, 255, 255), -1)
+                #
+                # resized_image = cv2.rotate(resized_image.copy(), cv2.ROTATE_90_CLOCKWISE)
 
                 # Show images from both cameras
                 cv2.namedWindow('RealSense_front', cv2.WINDOW_NORMAL)
@@ -480,10 +606,6 @@ def main():
                 if key & 0xFF == ord('q') or key == 27:
                     cv2.destroyAllWindows()
                     break
-
-                if key & 0xFF == ord('s'):
-                    if not mean_flag:
-                        mean_flag = True
 
         finally:
             rs_main.stop()

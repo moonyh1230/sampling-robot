@@ -22,7 +22,6 @@ from utils.torch_utils import load_classifier, select_device, time_sync
 from RealSense_Utilities.realsense_api.realsense_api import RealSenseCamera
 from RealSense_Utilities.realsense_api.realsense_api import find_realsense
 from RealSense_Utilities.realsense_api.realsense_api import frame_to_np_array
-from Sampling_Socket import SocketClass
 
 
 # FILE = Path(__file__).resolve()
@@ -103,10 +102,11 @@ def main():
     realsense_device = find_realsense()
 
     for serial, devices in realsense_device:
-        cameras[serial] = RealSenseCamera(depth_stream_width=640, depth_stream_height=480,
-                                          color_stream_width=640, color_stream_height=480,
-                                          depth_stream_fps=60,
-                                          device=devices, adv_mode_flag=True, device_type="d405")
+        if serial == '123622270472':
+            cameras[serial] = RealSenseCamera(depth_stream_width=640, depth_stream_height=480,
+                                              color_stream_width=640, color_stream_height=480,
+                                              color_stream_fps=30, depth_stream_fps=30,
+                                              device=devices, adv_mode_flag=True, device_type="d405")
 
     _, device = cameras.popitem()
 
@@ -118,10 +118,6 @@ def main():
 
     mean_temp = np.zeros((0, 6))
     mean_flag = False
-
-    sock = SocketClass("Client_Swab")
-    server_ip = "127.0.0.1"
-    server_port = 7000
 
     try:
         while True:
@@ -216,8 +212,6 @@ def main():
 
                         send_msg = struct.pack("fff", list_offset[0], list_offset[1], list_offset[2])
 
-                        sock.send_messages(send_msg, server_ip, server_port)
-
                         text = "offset x:{:.3f} y:{:.3f} z:{:.3f}".format(offset[0][0], offset[0][1], offset[0][2])
 
                         if np.linalg.norm(offset) > 40:
@@ -255,7 +249,6 @@ def main():
 
     finally:
         device.stop()
-        sock.close_socket()
 
 
 if __name__ == '__main__':
