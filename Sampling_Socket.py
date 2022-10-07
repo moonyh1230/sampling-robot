@@ -21,10 +21,11 @@ class Receiver(threading.Thread):
     def _receive(self):
         try:
             while True:
-                data, _ = self.receiver_socket.recvfrom(8388608)
+                data, addr = self.receiver_socket.recvfrom(8388608)
 
-                if len(data) >= 8:
+                if len(data) >= 1:
                     print(data)
+                    print(addr)
                     self.recv_msg = data
 
         finally:
