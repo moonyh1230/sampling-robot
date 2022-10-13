@@ -26,7 +26,6 @@ from RealSense_Utilities.realsense_api.realsense_api import find_realsense
 from RealSense_Utilities.realsense_api.realsense_api import frame_to_np_array
 from RealSense_Utilities.realsense_api.realsense_api import mediapipe_detection
 from threading import Thread
-from Sampling_Socket import SocketClass
 
 q = queue.Queue(maxsize=1)
 
@@ -191,7 +190,8 @@ def main():
     realsense_device = find_realsense()
 
     for serial, devices in realsense_device:
-        cameras[serial] = RealSenseCamera(device=devices, adv_mode_flag=True)
+        if serial == "105322250965":
+            cameras[serial] = RealSenseCamera(device=devices, adv_mode_flag=True)
 
     _, device = cameras.popitem()
 
@@ -199,10 +199,6 @@ def main():
     mean_flag = False
 
     jitter_count = 0
-
-    sock = SocketClass("Client_Swab")
-    server_ip = "127.0.0.1"
-    server_port = 7000
 
     with mp_face_mesh_0.FaceMesh(
             static_image_mode=False,

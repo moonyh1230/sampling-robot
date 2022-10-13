@@ -10,7 +10,9 @@ class Receiver(threading.Thread):
         self.receiver_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.receiver_socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576)
         self.receiver_socket.bind((ip, port))
+        self.receiver_socket.settimeout(0.1)
         self.recv_msg = None
+        self.recv_end = False
 
     def __str__(self):
         return self.udp_name
@@ -19,17 +21,24 @@ class Receiver(threading.Thread):
         self._receive()
 
     def _receive(self):
-        try:
-            while True:
+        while True:
+            if self.recv_end:
+                self.receiver_socket.close()
+                break
+
+            try:
                 data, addr = self.receiver_socket.recvfrom(8388608)
 
                 if len(data) >= 1:
-                    print(data)
-                    print(addr)
+                    # print(data)
+                    # print(addr)
                     self.recv_msg = data
 
-        finally:
-            self.receiver_socket.close()
+            except socket.timeout:
+                pass
+
+            except Exception as e:
+                print('receive error... please connect again')
 
     def get_recv_data(self):
         if self.recv_msg is not None:
@@ -39,6 +48,10 @@ class Receiver(threading.Thread):
 
         else:
             return None
+
+    def close_receiver_socket(self):
+        self.recv_end = True
+        print('closing receiver socket...')
 
 
 class Sender:

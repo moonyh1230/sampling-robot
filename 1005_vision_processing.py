@@ -60,6 +60,23 @@ def get_swab_pos(stroke):
     return swab_pos
 
 
+def make_transformation_matrix(width):
+    calibration_path = "transform.npz"
+
+    with np.load(calibration_path) as cal:
+        rot_mat, trans_vec = [cal[i] for i in ('rot', 'trans')]
+
+    m_T_o_inv = np.array([[-1, 0, 0, 780], [0, -1, 0, -73.7], [0, 0, -1, width], [0, 0, 0, 1]])
+    c_T_m_inv = np.zeros((4, 4))
+    c_T_m_inv[0:3, 0:3] = rot_mat.T
+    c_T_m_inv[0:3, 3] = -rot_mat.T @ trans_vec
+    c_T_m_inv[3, 0:4] = np.array([0, 0, 0, 1])
+
+    transform_mat = m_T_o_inv @ c_T_m_inv
+
+    return transform_mat
+
+
 class InitializeYOLO:
     def __init__(self, weights_path, img_size=640, conf_threshold=0.25,
                  iou_threshold=0.35, max_det=1, classes=None, agnostic_nms=False,
@@ -204,7 +221,7 @@ class SwabPositionCheck(Thread):
                                           (0, 0, 255), 2)
 
                     if not flag_send and frame_keep == 200:
-                        udp_send = struct.pack("iiffffffc", 1, 1, 0, 0, 0, 0, 0, 0, bytes(";", "utf-8"))
+                        udp_send = struct.pack("iiffffff", 1, 1, 0, 0, 0, 0, 0, 0)
 
                         self.udp_sender.send_messages(udp_send)
 
@@ -212,8 +229,7 @@ class SwabPositionCheck(Thread):
 
                 else:
                     if not flag_send and frame_keep == 200:
-                        udp_send = struct.pack("iiffffffc", 0, 1, list_offset[0], list_offset[1], list_offset[2], 0, 0,
-                                               0, bytes(";", "utf-8"))
+                        udp_send = struct.pack("iiffffff", 0, 1, list_offset[0], list_offset[1], list_offset[2], 0, 0, 0)
 
                         self.udp_sender.send_messages(udp_send)
 
@@ -316,26 +332,8 @@ mp_face_mesh_0 = mp.solutions.face_mesh
 
 frame_height, frame_width, channels = (480, 640, 3)
 
-transform_pointset = np.empty((0, 3))
-
-w = 500
-h = 700
-
-calibration_path = "transform.npz"
-
-with np.load(calibration_path) as cal:
-    rot_mat, trans_vec = [cal[i] for i in ('rot', 'trans')]
-
-m_T_o_inv = np.array([[-1, 0, 0, 780], [0, -1, 0, -73.7], [0, 0, -1, w], [0, 0, 0, 1]])
-c_T_m_inv = np.zeros((4, 4))
-c_T_m_inv[0:3, 0:3] = rot_mat.T
-c_T_m_inv[0:3, 3] = -rot_mat.T @ trans_vec
-c_T_m_inv[3, 0:4] = np.array([0, 0, 0, 1])
-
-transform_mat = m_T_o_inv @ c_T_m_inv
-
 UDP_vision_ip = "169.254.84.185"
-UDP_main_ip = "169.254.84.181"
+UDP_main_ip = "161.122.55.149"
 
 UDP_vision_port = 61456
 UDP_main_port = 61440
@@ -400,6 +398,7 @@ def main():
 
                     elif recv_msg is not None and recv_msg[0] == 1:
                         flag_path_calc = True
+                        robot_width = recv_msg[1]
 
                 reset = False
 
@@ -529,13 +528,15 @@ def main():
                                     trans_vec_temp = np.append(mean_obj[:, 0:314], np.array([[1]]))[np.newaxis, :]
                                     ang_vec_temp = np.append(mean_obj[:, 3:6], np.array([[0]]))[np.newaxis, :]
 
-                                    trans_vec_rot = transform_mat @ trans_vec_temp.T
-                                    ang_vec_rot = transform_mat @ ang_vec_temp.T
+                                    trans_mat = make_transformation_matrix(robot_width)
+
+                                    trans_vec_rot = trans_mat @ trans_vec_temp.T
+                                    ang_vec_rot = trans_mat @ ang_vec_temp.T
 
                                     udp_send_array = np.append(trans_vec_rot.T[0, 0:3], ang_vec_rot.T[0, 0:3])
-                                    udp_send = struct.pack("iiffffffc", 0, 2, udp_send_array[0], udp_send_array[1],
+                                    udp_send = struct.pack("iiffffff", 0, 2, udp_send_array[0], udp_send_array[1],
                                                            udp_send_array[2], udp_send_array[3], udp_send_array[4],
-                                                           udp_send_array[5], bytes(";", "utf-8"))
+                                                           udp_send_array[5])
 
                                     print(udp_send)
 
@@ -576,7 +577,7 @@ def main():
 
                     if offset_norm > 50:
                         print("invalid motion detected")
-                        udp_sender.send_messages(struct.pack("iiffffffc", 1, 0, 0, 0, 0, 0, 0, 0, bytes(";", "utf-8")))
+                        udp_sender.send_messages(struct.pack("iiffffff", 1, 0, 0, 0, 0, 0, 0, 0))
 
                 face_center_prev = face_center_current
 
@@ -608,6 +609,8 @@ def main():
         finally:
             rs_main.stop()
             rs_swab.stop()
+            udp_sender.close_sender_socket()
+            udp_receiver.close_receiver_socket()
 
 
 if __name__ == '__main__':
