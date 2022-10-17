@@ -12,8 +12,8 @@ from RealSense_Utilities.realsense_api.realsense_api import frame_to_np_array
 ARUCO_PARAMETERS = aruco.DetectorParameters_create()
 ARUCO_DICT = aruco.Dictionary_get(aruco.DICT_4X4_250)
 
-squareLength = 0.060
-markerLength = 0.030
+squareLength = 0.030
+markerLength = 0.020
 
 name = "transform.npz"
 

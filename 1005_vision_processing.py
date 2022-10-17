@@ -393,12 +393,15 @@ def main():
             while True:
                 if not flag_path_calc and not flag_swab_check:
                     recv_msg = udp_receiver.get_recv_data()
-                    if recv_msg is not None and recv_msg[0] == 0:
+
+                    clustered_data = recv_msg.decode('utf-8')
+                    recv_protocol = list(map(int, clustered_data.split('[')[1].split(']')[0].split(',')))
+                    if recv_protocol is not None and recv_protocol[0] == 0:
                         flag_swab_check = True
 
-                    elif recv_msg is not None and recv_msg[0] == 1:
+                    elif recv_protocol is not None and recv_protocol[0] == 1:
                         flag_path_calc = True
-                        robot_width = recv_msg[1]
+                        robot_width = recv_protocol[1]
 
                 reset = False
 
