@@ -6,8 +6,8 @@ import numpy as np
 
 
 def run():
-    sender_ip = "192.168.8.3"
-    receiver_ip = "192.168.8.1"  # L3 main computer ip
+    sender_ip = "169.254.84.185"
+    receiver_ip = "169.254.211.140"  # L3 main computer ip
 
     sender_port = 61496
     receiver_port = 61480

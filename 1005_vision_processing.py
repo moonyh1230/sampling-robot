@@ -1,12 +1,6 @@
 import queue
 import struct
-import threading
-
 import cv2
-import os
-import random
-import sys
-import time
 import numpy as np
 import mediapipe as mp
 import pyrealsense2 as rs
@@ -14,15 +8,10 @@ import torch
 import torch.backends.cudnn as cudnn
 import timeit
 import math
-import pandas as pd
-from datetime import datetime
-from pathlib import Path
 from models.experimental import attempt_load
-from utils.augmentations import letterbox, random_perspective
-from utils.general import check_img_size, check_imshow, non_max_suppression, \
-    apply_classifier, scale_coords, increment_path
-from utils.plots import Annotator, colors
-from utils.torch_utils import load_classifier, select_device, time_sync
+from utils.augmentations import letterbox
+from utils.general import check_img_size, non_max_suppression, scale_coords
+from utils.torch_utils import select_device, time_sync
 from RealSense_Utilities.realsense_api.realsense_api import RealSenseCamera
 from RealSense_Utilities.realsense_api.realsense_api import find_realsense
 from RealSense_Utilities.realsense_api.realsense_api import frame_to_np_array
@@ -205,35 +194,40 @@ class SwabPositionCheck(Thread):
                 ideal_camera_z = np.linalg.norm(ideal_camera_z_vec)
 
                 swabs = self.model.detect_from_img(img_rs, self.device)
+                try:
+                    offset = np.array([[0 - swabs[1] * 1000,
+                                        ideal_camera_y + swabs[0] * 1000,
+                                        ideal_camera_z - swabs[2] * 1000]]
+                                      )
 
-                offset = np.array([[0 - swabs[1] * 1000,
-                                    ideal_camera_y + swabs[0] * 1000,
-                                    ideal_camera_z - swabs[2] * 1000]]
-                                  )
+                    list_offset = offset[0].tolist()
 
-                list_offset = offset[0].tolist()
+                    text = "offset x:{:.3f} y:{:.3f} z:{:.3f}".format(offset[0][0], offset[0][1], offset[0][2])
 
-                text = "offset x:{:.3f} y:{:.3f} z:{:.3f}".format(offset[0][0], offset[0][1], offset[0][2])
+                    if np.linalg.norm(offset) > 1000:
+                        offset_over = "Need to retry swab gripping. max offset: {:.3f} mm".format(np.max(offset))
+                        img_raw = cv2.putText(img_raw.copy(), offset_over, (10, 60), cv2.FONT_HERSHEY_PLAIN, 0.7,
+                                              (0, 0, 255), 2)
 
-                if np.linalg.norm(offset) > 40:
-                    offset_over = "Need to retry swab gripping. max offset: {:.3f} mm".format(np.max(offset))
-                    img_raw = cv2.putText(img_raw.copy(), offset_over, (10, 60), cv2.FONT_HERSHEY_PLAIN, 0.7,
-                                          (0, 0, 255), 2)
+                        if not flag_send:
+                            udp_send = struct.pack("ffffffff", 1, 1, 0, 0, 0, 0, 0, 0)
 
-                    if not flag_send and frame_keep == 200:
-                        udp_send = struct.pack("iiffffff", 1, 1, 0, 0, 0, 0, 0, 0)
+                            self.udp_sender.send_messages(udp_send)
 
-                        self.udp_sender.send_messages(udp_send)
+                            flag_send = True
 
-                        flag_send = True
+                    else:
+                        if not flag_send and frame_keep == 200:
+                            udp_send = struct.pack("ffffffff", 0, 1,
+                                                   list_offset[0], list_offset[1], list_offset[2], 0, 0, 0)
 
-                else:
-                    if not flag_send and frame_keep == 200:
-                        udp_send = struct.pack("iiffffff", 0, 1, list_offset[0], list_offset[1], list_offset[2], 0, 0, 0)
+                            self.udp_sender.send_messages(udp_send)
 
-                        self.udp_sender.send_messages(udp_send)
+                            flag_send = True
 
-                        flag_send = True
+                except Exception:
+                    print("swab_thread: can't find swab")
+                    text = "can't find swab"
 
                 img_raw = cv2.putText(img_raw.copy(), text, (10, 30), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 0), 2)
 
@@ -252,7 +246,6 @@ class SwabPositionCheck(Thread):
 
         finally:
             cv2.destroyWindow('RealSense_swab')
-            self.device.stop()
 
 
 class LandmarkMaker(Thread):
@@ -333,10 +326,10 @@ mp_face_mesh_0 = mp.solutions.face_mesh
 frame_height, frame_width, channels = (480, 640, 3)
 
 UDP_vision_ip = "169.254.84.185"
-UDP_main_ip = "161.122.55.149"
+UDP_main_ip = "169.254.211.140"
 
-UDP_vision_port = 61456
-UDP_main_port = 61440
+UDP_vision_port = 61496
+UDP_main_port = 61480
 
 
 @torch.no_grad()
@@ -394,14 +387,23 @@ def main():
                 if not flag_path_calc and not flag_swab_check:
                     recv_msg = udp_receiver.get_recv_data()
 
-                    clustered_data = recv_msg.decode('utf-8')
-                    recv_protocol = list(map(int, clustered_data.split('[')[1].split(']')[0].split(',')))
-                    if recv_protocol is not None and recv_protocol[0] == 0:
-                        flag_swab_check = True
+                    if recv_msg is not None:
+                        clustered_data = recv_msg.decode('utf-8')
+                        recv_protocol = list(map(int, clustered_data.split('[')[1].split(']')[0].split(',')))
+                        if recv_protocol is not None and recv_protocol[0] == 0:
+                            flag_swab_check = True
 
-                    elif recv_protocol is not None and recv_protocol[0] == 1:
-                        flag_path_calc = True
-                        robot_width = recv_protocol[1]
+                        elif recv_protocol is not None and recv_protocol[0] == 1:
+                            flag_path_calc = True
+                            robot_width = recv_protocol[1]
+
+                if flag_swab_check:
+                    swab_check_thread = SwabPositionCheck(rs_swab, yolo_swab, udp_sender)
+
+                    swab_check_thread.start()
+                    swab_check_thread.join()
+
+                    flag_swab_check = False
 
                 reset = False
 
@@ -427,6 +429,8 @@ def main():
                 img_rs0 = np.copy(rs_main.color_image)
 
                 img_raw = np.copy(img_rs0)
+
+                resized_image = cv2.resize(img_raw, dsize=(0, 0), fx=1, fy=1, interpolation=cv2.INTER_AREA)
 
                 p1 = LandmarkMaker(img_rs0, face_mesh_0, rs_main.depth_frame, rs_main.color_intrinsics)
                 p1.start()
@@ -499,6 +503,10 @@ def main():
                             print("didn't detect ears")
                             continue
 
+                        except AttributeError:
+                            print("None-type error")
+                            continue
+
                         vec_no_9 = x_reshaped[9]
                         vec_no_200 = x_reshaped[200]
                         vec_no_4 = x_reshaped[4]
@@ -528,7 +536,7 @@ def main():
                                 if len(mean_temp) > 100:
                                     mean_obj = np.mean(mean_temp, axis=0)[np.newaxis, :]
 
-                                    trans_vec_temp = np.append(mean_obj[:, 0:314], np.array([[1]]))[np.newaxis, :]
+                                    trans_vec_temp = np.append(mean_obj[:, 0:3], np.array([[1]]))[np.newaxis, :]
                                     ang_vec_temp = np.append(mean_obj[:, 3:6], np.array([[0]]))[np.newaxis, :]
 
                                     trans_mat = make_transformation_matrix(robot_width)
@@ -537,7 +545,7 @@ def main():
                                     ang_vec_rot = trans_mat @ ang_vec_temp.T
 
                                     udp_send_array = np.append(trans_vec_rot.T[0, 0:3], ang_vec_rot.T[0, 0:3])
-                                    udp_send = struct.pack("iiffffff", 0, 2, udp_send_array[0], udp_send_array[1],
+                                    udp_send = struct.pack("ffffffff", 0, 2, udp_send_array[0], udp_send_array[1],
                                                            udp_send_array[2], udp_send_array[3], udp_send_array[4],
                                                            udp_send_array[5])
 
@@ -564,13 +572,8 @@ def main():
                         resized_image = cv2.resize(img_disp, dsize=(0, 0), fx=1, fy=1,
                                                    interpolation=cv2.INTER_AREA)
 
-                elif flag_swab_check:
-                    swab_check_thread = SwabPositionCheck(rs_swab, yolo_swab, udp_sender)
-
-                    swab_check_thread.start()
-                    swab_check_thread.join()
-
-                    flag_swab_check = False
+                        resized_image = cv2.putText(resized_image.copy(), "path calculating...", (10, 60),
+                                                    cv2.FONT_HERSHEY_PLAIN, 0.7, (0, 0, 255), 2)
 
                 rearranged_face = face_points.reshape(468, 3)
                 face_center_current = np.average(rearranged_face, axis=0)
@@ -580,7 +583,7 @@ def main():
 
                     if offset_norm > 50:
                         print("invalid motion detected")
-                        udp_sender.send_messages(struct.pack("iiffffff", 1, 0, 0, 0, 0, 0, 0, 0))
+                        udp_sender.send_messages(struct.pack("ffffffff", 1, 0, 0, 0, 0, 0, 0, 0))
 
                 face_center_prev = face_center_current
 
@@ -599,6 +602,8 @@ def main():
                 # resized_image = cv2.rotate(resized_image.copy(), cv2.ROTATE_90_CLOCKWISE)
 
                 # Show images from both cameras
+
+                resized_image = cv2.rotate(resized_image.copy(), cv2.ROTATE_90_CLOCKWISE)
                 cv2.namedWindow('RealSense_front', cv2.WINDOW_NORMAL)
                 cv2.resizeWindow('RealSense_front', resized_image.shape[1], resized_image.shape[0])
                 cv2.imshow('RealSense_front', resized_image)
@@ -611,7 +616,6 @@ def main():
 
         finally:
             rs_main.stop()
-            rs_swab.stop()
             udp_sender.close_sender_socket()
             udp_receiver.close_receiver_socket()
 

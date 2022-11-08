@@ -10,7 +10,7 @@ from RealSense_Utilities.realsense_api.realsense_api import find_realsense
 from RealSense_Utilities.realsense_api.realsense_api import frame_to_np_array
 
 ARUCO_PARAMETERS = aruco.DetectorParameters_create()
-ARUCO_DICT = aruco.Dictionary_get(aruco.DICT_4X4_250)
+ARUCO_DICT = aruco.Dictionary_get(aruco.DICT_4X4_50)
 
 squareLength = 0.030
 markerLength = 0.020
@@ -32,7 +32,8 @@ def run():
     realsense_device = find_realsense()
 
     for serial, devices in realsense_device:
-        cameras[serial] = RealSenseCamera(device=devices, adv_mode_flag=True)
+        if serial == '105322250965':
+            cameras[serial] = RealSenseCamera(device=devices, adv_mode_flag=True)
 
     ser, device = cameras.popitem()
 
