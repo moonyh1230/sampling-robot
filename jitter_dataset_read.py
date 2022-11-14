@@ -5,16 +5,19 @@ import os
 
 np.set_printoptions(precision=4)
 
-var_list = np.zeros((0, 7))
-std_list = np.zeros((0, 7))
+var_list = np.zeros((0, 4))
+std_list = np.zeros((0, 4))
 
-dir_path = "./jittering_test/09191041"
+dir_path = "./jittering_test/11141423/filtered"
 
 csv_list = os.listdir(dir_path)
 
 for i in csv_list:
     dl_set = np.zeros((0, 1))
-    dataset = pd.read_csv(dir_path + "/{}".format(i), header=0, names=['counts', 'x', 'y', 'z', 'vec_x', 'vex_y', 'vec_z'],
+    # dataset = pd.read_csv(dir_path + "/{}".format(i), header=0, names=['counts', 'x', 'y', 'z', 'vec_x', 'vex_y', 'vec_z'],
+    #                       index_col='counts')
+    dataset = pd.read_csv(dir_path + "/{}".format(i), header=0,
+                          names=['counts', 'x', 'y', 'z'],
                           index_col='counts')
 
     var = dataset.var()
