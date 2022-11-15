@@ -21,6 +21,7 @@ from Sampling_Socket import Receiver, Sender
 
 q = queue.Queue(maxsize=1)
 
+
 # FILE = Path(__file__).resolve()
 # ROOT = FILE.parents[0]  # YOLOv5 root directory
 # if str(ROOT) not in sys.path:
@@ -64,6 +65,52 @@ def make_transformation_matrix(width):
     transform_mat = m_T_o_inv @ c_T_m_inv
 
     return transform_mat
+
+
+def zoom(img: np.ndarray, scale, center=None):
+    height, width = img.shape[:2]
+    rate = height / width
+
+    if center is None:
+        center_x = int(width / 2)
+        center_y = int(height / 2)
+    else:
+        center_x, center_y = center
+
+    if center_x < width * (1 - rate):
+        center_x = width * (1 - rate)
+    elif center_x > width * rate:
+        center_x = width * rate
+
+    if center_y < height * (1 - rate):
+        center_y = height * (1 - rate)
+    elif center_y > height * rate:
+        center_y = height * rate
+
+    center_x, center_y = int(center_x), int(center_y)
+    left_x, right_x = center_x, int(width - center_x)
+    up_y, down_y = int(height - center_y), center_y
+    radius_x = min(left_x, right_x)
+    radius_y = min(up_y, down_y)
+
+    # Actual zoom code
+    radius_x, radius_y = int(scale * radius_x), int(scale * radius_y)
+
+    # size calculation
+    min_x, max_x = center_x - radius_x, center_x + radius_x
+    min_y, max_y = center_y - radius_y, center_y + radius_y
+
+    # Crop image to size
+    cropped = img[min_y:max_y, min_x:max_x]
+    # Return to original size
+    # if scale >= 0:
+    #     new_cropped = cv2.resize(cropped, (width, height), interpolation=cv2.INTER_CUBIC)
+    # else:
+    #     new_cropped = cv2.resize(cropped, (width, height), interpolation=cv2.INTER_CUBIC)
+
+    new_cropped = cv2.resize(cropped, (width, height), interpolation=cv2.INTER_CUBIC)
+
+    return new_cropped
 
 
 class InitializeYOLO:
@@ -128,7 +175,8 @@ class InitializeYOLO:
         pred = self.model(img_0, augment=self.augment)[0]
 
         # Apply NMS
-        pred = non_max_suppression(pred, self.conf_thres, self.iou_thres, self.classes, self.agnostic_nms, max_det=self.max_det)
+        pred = non_max_suppression(pred, self.conf_thres, self.iou_thres, self.classes, self.agnostic_nms,
+                                   max_det=self.max_det)
         t2 = time_sync()
 
         # Process detections
@@ -246,6 +294,56 @@ class SwabPositionCheck(Thread):
 
         finally:
             cv2.destroyWindow('RealSense_swab')
+
+
+class EndEffectTracking(Thread):
+    def __init__(self, rs_device: RealSenseCamera):
+        Thread.__init__(self)
+        self.device = rs_device
+        self.close_flag = False
+        self.run_check = False
+
+    def run(self):
+        self.run_check = True
+
+        try:
+            while True:
+                self.device.get_data()
+
+                frameset = self.device.frameset
+                self.device.get_aligned_frames(frameset, aligned_to_color=True)
+
+                self.device.frameset = frameset
+
+                self.device.color_frame = frameset.get_color_frame()
+                self.device.depth_frame = frameset.get_depth_frame()
+
+                self.device.color_image = frame_to_np_array(self.device.color_frame)
+
+                img_rs = np.copy(self.device.color_image)
+                img_raw = np.copy(img_rs)
+
+                resized_image = cv2.resize(img_raw, dsize=(0, 0), fx=1, fy=1, interpolation=cv2.INTER_AREA)
+
+                # Show images from both cameras
+                cv2.namedWindow('RealSense_end-effector', cv2.WINDOW_NORMAL)
+                cv2.resizeWindow('RealSense_end-effector', resized_image.shape[1], resized_image.shape[0])
+                cv2.imshow('RealSense_end-effector', resized_image)
+
+                cv2.waitKey(1)
+
+                if self.close_flag:
+                    self.run_check = False
+                    break
+
+        finally:
+            cv2.destroyWindow('RealSense_swab')
+
+    def __bool__(self):
+        return self.run_check
+
+    def close_switch(self):
+        self.close_flag = True
 
 
 class LandmarkMaker(Thread):
@@ -378,6 +476,10 @@ def main():
 
     face_center_prev = None
 
+    zoom_scale = 0.5
+
+    end_effector_camera = EndEffectTracking(rs_swab)
+
     with mp_face_mesh_0.FaceMesh(
             static_image_mode=False,
             min_detection_confidence=0.5,
@@ -396,6 +498,10 @@ def main():
                         elif recv_protocol is not None and recv_protocol[0] == 1:
                             flag_path_calc = True
                             robot_width = recv_protocol[1]
+
+                        elif recv_protocol is not None and recv_protocol[0] == 2:
+                            if flag_path_calc:
+                                flag_path_calc = False
 
                 if flag_swab_check:
                     swab_check_thread = SwabPositionCheck(rs_swab, yolo_swab, udp_sender)
@@ -476,6 +582,9 @@ def main():
                 face_points = q.get()
 
                 if flag_path_calc:
+                    if not end_effector_camera:
+                        end_effector_camera.start()
+
                     if not mean_flag:
                         mean_flag = True
 
@@ -556,8 +665,6 @@ def main():
                                     mean_flag = False
                                     mean_temp = np.zeros((0, 6))
 
-                                    flag_path_calc = False
-
                             swab_point_0 = rs.rs2_project_point_to_pixel(rs_main.color_intrinsics, nose_point)
                             swab_point_1 = rs.rs2_project_point_to_pixel(rs_main.color_intrinsics, swab_visualize)
 
@@ -569,11 +676,13 @@ def main():
                                                 list(map(int, swab_point_1)),
                                                 color=(0, 0, 255), thickness=2)
 
-                        resized_image = cv2.resize(img_disp, dsize=(0, 0), fx=1, fy=1,
-                                                   interpolation=cv2.INTER_AREA)
+                        # resized_image = cv2.resize(img_disp, dsize=(0, 0), fx=1, fy=1,
+                        #                            interpolation=cv2.INTER_AREA)
 
-                        resized_image = cv2.putText(resized_image.copy(), "path calculating...", (10, 60),
-                                                    cv2.FONT_HERSHEY_PLAIN, 0.7, (0, 0, 255), 2)
+                        resized_image = zoom(img_disp, zoom_scale)
+
+                        # resized_image = cv2.putText(resized_image.copy(), "path calculating...", (10, 60),
+                        #                             cv2.FONT_HERSHEY_PLAIN, 0.7, (0, 0, 255), 2)
 
                 rearranged_face = face_points.reshape(468, 3)
                 face_center_current = np.average(rearranged_face, axis=0)
