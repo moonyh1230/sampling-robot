@@ -8,6 +8,7 @@ import torch
 import torch.backends.cudnn as cudnn
 import timeit
 import math
+import psutil
 from models.experimental import attempt_load
 from utils.augmentations import letterbox
 from utils.general import check_img_size, non_max_suppression, scale_coords
@@ -18,15 +19,22 @@ from RealSense_Utilities.realsense_api.realsense_api import frame_to_np_array
 from RealSense_Utilities.realsense_api.realsense_api import mediapipe_detection
 from threading import Thread
 from Sampling_Socket import Receiver, Sender
+from OneEuroFilter import OneEuroFilter
 
 q = queue.Queue(maxsize=1)
-
 
 # FILE = Path(__file__).resolve()
 # ROOT = FILE.parents[0]  # YOLOv5 root directory
 # if str(ROOT) not in sys.path:
 #     sys.path.append(str(ROOT))  # add ROOT to PATH
 # ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
+
+
+def memory_usage(message: str = 'debug'):
+    # current process RAM usage
+    p = psutil.Process()
+    rss = p.memory_info().rss / 2 ** 20 # Bytes to MB
+    print(f"[{message}] memory usage: {rss: 10.5f} MB")
 
 
 def get_mid_pos(box, depth_frame, intr):
@@ -323,7 +331,8 @@ class EndEffectTracking(Thread):
                 img_rs = np.copy(self.device.color_image)
                 img_raw = np.copy(img_rs)
 
-                resized_image = cv2.resize(img_raw, dsize=(0, 0), fx=1, fy=1, interpolation=cv2.INTER_AREA)
+                resized_image = cv2.resize(img_raw, dsize=(0, 0), fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+                resized_image = cv2.rotate(resized_image.copy(), cv2.ROTATE_90_COUNTERCLOCKWISE)
 
                 # Show images from both cameras
                 cv2.namedWindow('RealSense_end-effector', cv2.WINDOW_NORMAL)
@@ -355,12 +364,21 @@ class LandmarkMaker(Thread):
         self.color_intrinsics = color_intrinsics
         self.img_circled = None
         self.ret = None
+        self.zoom_scale = 0.5
+        self.zoom_flag = True
 
     def run(self):
         _, results = mediapipe_detection(self.color_image, self.face_mesh)
         multi_face_landmarks = results.multi_face_landmarks
 
         try:
+            # if not multi_face_landmarks:
+            #     img_zoom = zoom(self.color_image, scale=self.zoom_scale)
+            #     self.zoom_flag = True
+            #
+            #     _, results = mediapipe_detection(img_zoom, self.face_mesh)
+            #     multi_face_landmarks = results.multi_face_landmarks
+
             if multi_face_landmarks:
                 face_landmarks = results.multi_face_landmarks[0]
 
@@ -368,27 +386,66 @@ class LandmarkMaker(Thread):
 
                 for i in range(468):
                     pixel_point = face_landmarks.landmark[i]
-                    pixel_x = int(pixel_point.x * frame_width)
-                    pixel_y = int(pixel_point.y * frame_height)
 
-                    if i == 4 or i == 9 or i == 200:
-                        _ = cv2.circle(self.color_image, (pixel_x, pixel_y), 2, (0, 0, 0), -1)
-                    # elif i == 93:
-                    #     color_image = cv2.circle(color_image, (pixel_x, pixel_y), 5, (0, 0, 255), -1)
-                    elif i == 6:
-                        _ = cv2.circle(self.color_image, (pixel_x, pixel_y), 2, (0, 0, 255), -1)
-                    # else:
-                    #     color_image = cv2.circle(color_image, (pixel_x, pixel_y), 1, (0, 255, 255), -1)
+                    if self.zoom_flag:
+                        pixel_x = int(pixel_point.x * (frame_width * self.zoom_scale))
+                        pixel_y = int(pixel_point.y * (frame_height * self.zoom_scale))
 
-                    depth = self.depth_frame.get_distance(pixel_x, pixel_y)
-                    if depth == 0:
-                        raise ValueError
+                        if i == 4 or i == 9 or i == 200:
+                            _ = cv2.circle(self.color_image,
+                                           (pixel_x + int((frame_width * self.zoom_scale) / 2),
+                                            pixel_y + int((frame_height * self.zoom_scale) / 2)),
+                                           2,
+                                           (0, 0, 0),
+                                           -1)
+                        # elif i == 93:
+                        #     color_image = cv2.circle(color_image, (pixel_x, pixel_y), 5, (0, 0, 255), -1)
+                        elif i == 6:
+                            _ = cv2.circle(self.color_image,
+                                           (pixel_x + int((frame_width * self.zoom_scale) / 2),
+                                            pixel_y + int((frame_height * self.zoom_scale) / 2)),
+                                           2,
+                                           (0, 0, 255),
+                                           -1)
+                        # else:
+                        #     color_image = cv2.circle(color_image, (pixel_x, pixel_y), 1, (0, 255, 255), -1)
 
-                    x, y, z = convert_depth_to_phys_coord(pixel_x, pixel_y, depth, self.color_intrinsics)
+                        depth = self.depth_frame.get_distance(pixel_x + int((frame_width * self.zoom_scale) / 2),
+                                                              pixel_y + int((frame_height * self.zoom_scale) / 2))
+                        if depth == 0:
+                            raise ValueError
 
-                    temporal_3d_point = np.array([x, y, z]) * 1000
+                        x, y, z = convert_depth_to_phys_coord(
+                            pixel_x + int((frame_width * self.zoom_scale) / 2),
+                            pixel_y + int((frame_height * self.zoom_scale) / 2),
+                            depth,
+                            self.color_intrinsics)
 
-                    points_3d = np.append(points_3d, temporal_3d_point[np.newaxis, :], axis=0)
+                        temporal_3d_point = np.array([x, y, z]) * 1000
+
+                        points_3d = np.append(points_3d, temporal_3d_point[np.newaxis, :], axis=0)
+                    else:
+                        pixel_x = int(pixel_point.x * frame_width)
+                        pixel_y = int(pixel_point.y * frame_height)
+
+                        if i == 4 or i == 9 or i == 200:
+                            _ = cv2.circle(self.color_image, (pixel_x, pixel_y), 2, (0, 0, 0), -1)
+                        # elif i == 93:
+                        #     color_image = cv2.circle(color_image, (pixel_x, pixel_y), 5, (0, 0, 255), -1)
+                        elif i == 6:
+                            _ = cv2.circle(self.color_image, (pixel_x, pixel_y), 2, (0, 0, 255), -1)
+                        # else:
+                        #     color_image = cv2.circle(color_image, (pixel_x, pixel_y), 1, (0, 255, 255), -1)
+
+                        depth = self.depth_frame.get_distance(pixel_x, pixel_y)
+                        if depth == 0:
+                            raise ValueError
+
+                        x, y, z = convert_depth_to_phys_coord(pixel_x, pixel_y, depth, self.color_intrinsics)
+
+                        temporal_3d_point = np.array([x, y, z]) * 1000
+
+                        points_3d = np.append(points_3d, temporal_3d_point[np.newaxis, :], axis=0)
 
                 # for debug
                 if q.full():
@@ -396,6 +453,7 @@ class LandmarkMaker(Thread):
 
                 q.put(points_3d.flatten())
                 self.ret = True
+                self.zoom_flag = False
 
             else:
                 # for debug
@@ -415,7 +473,8 @@ class LandmarkMaker(Thread):
             pass
 
         finally:
-            self.depth_frame.keep()
+            # self.depth_frame.keep()
+            pass
 
 
 mp_drawing = mp.solutions.drawing_utils
@@ -434,6 +493,13 @@ UDP_main_port = 61480
 def main():
     rs_main = None
     rs_swab = None
+
+    first_iter = True
+    prev_timestamp = 0
+
+    min_cutoff = 0.0001
+    beta = 0
+
     weights_swab = "swab_0801.pt"
     weights_main = "ear_0829_x.pt"
 
@@ -516,6 +582,8 @@ def main():
                 start_time = timeit.default_timer()
                 rs_main.get_data()
 
+                current_timestamp = rs_main.current_timestamp
+
                 frameset = rs_main.frameset
                 rs_main.get_aligned_frames(frameset, aligned_to_color=True)
 
@@ -534,11 +602,13 @@ def main():
 
                 img_rs0 = np.copy(rs_main.color_image)
 
+                zoomed_image = zoom(img_rs0.copy(), zoom_scale)
+
                 img_raw = np.copy(img_rs0)
 
                 resized_image = cv2.resize(img_raw, dsize=(0, 0), fx=1, fy=1, interpolation=cv2.INTER_AREA)
 
-                p1 = LandmarkMaker(img_rs0, face_mesh_0, rs_main.depth_frame, rs_main.color_intrinsics)
+                p1 = LandmarkMaker(zoomed_image.copy(), face_mesh_0, rs_main.depth_frame, rs_main.color_intrinsics)
                 p1.start()
                 p1.join()
 
@@ -562,10 +632,16 @@ def main():
 
                         resized_image = cv2.rotate(resized_image.copy(), cv2.ROTATE_90_CLOCKWISE)
 
+                        resized_image = zoom(resized_image, zoom_scale)
+
+                        cropped_image = resized_image[int(frame_width / 2 - 140):int(frame_width / 2 + 220), :]
+                        cropped_image = cv2.resize(cropped_image.copy(), dsize=(0, 0), fx=2.7, fy=2.7,
+                                                   interpolation=cv2.INTER_CUBIC)
+
                         # Show images from both cameras
                         cv2.namedWindow('RealSense_front', cv2.WINDOW_NORMAL)
-                        cv2.resizeWindow('RealSense_front', resized_image.shape[1], resized_image.shape[0])
-                        cv2.imshow('RealSense_front', resized_image)
+                        cv2.resizeWindow('RealSense_front', cropped_image.shape[1], cropped_image.shape[0])
+                        cv2.imshow('RealSense_front', cropped_image)
 
                         key = cv2.waitKey(1)
 
@@ -580,6 +656,8 @@ def main():
                     pass
 
                 face_points = q.get()
+
+                elapsed = current_timestamp - prev_timestamp
 
                 if flag_path_calc:
                     if not end_effector_camera:
@@ -620,6 +698,58 @@ def main():
                         vec_no_200 = x_reshaped[200]
                         vec_no_4 = x_reshaped[4]
 
+                        # backup current iteration points -> 3d array(number_of_points, 1, 3)
+                        points_3d_iter = np.concatenate(
+                            (nose_point[np.newaxis, :],
+                             vec_ear[np.newaxis, :],
+                             vec_no_4[np.newaxis, :],
+                             vec_no_9[np.newaxis, :],
+                             vec_no_200[np.newaxis, :]),
+                            axis=0
+                        )
+
+                        number_of_points = points_3d_iter.shape[0]
+
+                        points_3d_iter = points_3d_iter.reshape((number_of_points, 1, 3))
+
+                        # initializing iteration block
+                        if first_iter:
+                            points_3d = points_3d_iter
+                        else:
+                            points_3d = np.concatenate((points_3d, points_3d_iter), axis=1)
+
+                        if first_iter:
+                            if np.sum(points_3d_iter) != 0:
+                                one_euro_x = OneEuroFilter(0, points_3d_iter[:, :, 0].T, min_cutoff=min_cutoff,
+                                                           beta=beta)
+                                one_euro_y = OneEuroFilter(0, points_3d_iter[:, :, 1].T, min_cutoff=min_cutoff,
+                                                           beta=beta)
+                                one_euro_z = OneEuroFilter(0, points_3d_iter[:, :, 2].T, min_cutoff=min_cutoff,
+                                                           beta=beta)
+
+                                first_iter = False
+
+                            points_3d_hat = points_3d_iter
+                        else:
+                            points_3d_x_hat = one_euro_x(elapsed, points_3d_iter[:, :, 0].T)
+                            points_3d_y_hat = one_euro_y(elapsed, points_3d_iter[:, :, 1].T)
+                            points_3d_z_hat = one_euro_z(elapsed, points_3d_iter[:, :, 2].T)
+
+                            points_3d_iter_hat = np.concatenate(
+                                (points_3d_x_hat.reshape((number_of_points, 1, 1)),
+                                 points_3d_y_hat.reshape((number_of_points, 1, 1)),
+                                 points_3d_z_hat.reshape((number_of_points, 1, 1))),
+                                axis=2
+                            )
+
+                            points_3d_hat = np.concatenate((points_3d_hat, points_3d_iter_hat), axis=1)
+
+                        vec_nose = points_3d_hat[0][0]
+                        vec_ear = points_3d_hat[1][0]
+                        vec_no_4 = points_3d_hat[2][0]
+                        vec_no_9 = points_3d_hat[3][0]
+                        vec_no_200 = points_3d_hat[4][0]
+
                         plane_norm_vec = np.cross((vec_no_200 - vec_no_4), (vec_no_9 - vec_no_4))
                         plane_norm_unit_vec = plane_norm_vec / np.linalg.norm(plane_norm_vec)
 
@@ -627,14 +757,14 @@ def main():
                             img_disp = img_raw.copy()
 
                         else:
-                            swab_vec = (nose_point - vec_ear) / np.linalg.norm(nose_point - vec_ear)
+                            swab_vec = (vec_nose - vec_ear) / np.linalg.norm(vec_nose - vec_ear)
 
                             proj_norm_vec = np.dot(swab_vec, plane_norm_unit_vec) * plane_norm_unit_vec
                             proj_vec = (swab_vec - proj_norm_vec) / np.linalg.norm(swab_vec - proj_norm_vec)
 
-                            swab_visualize = nose_point + proj_vec * 100
+                            swab_visualize = vec_nose + proj_vec * 100
 
-                            send_obj = np.append(nose_point, -proj_vec)
+                            send_obj = np.append(vec_nose, -proj_vec)
 
                             # print(send_obj)
 
@@ -665,7 +795,7 @@ def main():
                                     mean_flag = False
                                     mean_temp = np.zeros((0, 6))
 
-                            swab_point_0 = rs.rs2_project_point_to_pixel(rs_main.color_intrinsics, nose_point)
+                            swab_point_0 = rs.rs2_project_point_to_pixel(rs_main.color_intrinsics, vec_nose)
                             swab_point_1 = rs.rs2_project_point_to_pixel(rs_main.color_intrinsics, swab_visualize)
 
                             img_circle = cv2.circle(img_raw.copy(), list(map(int, swab_point_0)), 2, (255, 0, 0), -1)
@@ -676,13 +806,11 @@ def main():
                                                 list(map(int, swab_point_1)),
                                                 color=(0, 0, 255), thickness=2)
 
-                        # resized_image = cv2.resize(img_disp, dsize=(0, 0), fx=1, fy=1,
-                        #                            interpolation=cv2.INTER_AREA)
+                        resized_image = cv2.resize(img_disp, dsize=(0, 0), fx=1, fy=1,
+                                                   interpolation=cv2.INTER_AREA)
 
-                        resized_image = zoom(img_disp, zoom_scale)
-
-                        # resized_image = cv2.putText(resized_image.copy(), "path calculating...", (10, 60),
-                        #                             cv2.FONT_HERSHEY_PLAIN, 0.7, (0, 0, 255), 2)
+                        resized_image = cv2.putText(resized_image.copy(), "path calculating...", (10, 60),
+                                                    cv2.FONT_HERSHEY_PLAIN, 0.7, (0, 0, 255), 2)
 
                 rearranged_face = face_points.reshape(468, 3)
                 face_center_current = np.average(rearranged_face, axis=0)
@@ -690,11 +818,13 @@ def main():
                 if face_center_prev is not None:
                     offset_norm = np.linalg.norm(face_center_prev - face_center_current)
 
-                    if offset_norm > 50:
+                    if offset_norm > 75:
                         print("invalid motion detected")
                         udp_sender.send_messages(struct.pack("ffffffff", 1, 0, 0, 0, 0, 0, 0, 0))
 
                 face_center_prev = face_center_current
+
+                prev_timestamp = current_timestamp
 
                 terminate_time = timeit.default_timer()
 
@@ -712,10 +842,18 @@ def main():
 
                 # Show images from both cameras
 
+                memory_usage('#1')
+
                 resized_image = cv2.rotate(resized_image.copy(), cv2.ROTATE_90_CLOCKWISE)
+
+                resized_image = zoom(resized_image.copy(), zoom_scale)
+
+                cropped_image = resized_image[int(frame_width / 2 - 80):int(frame_width / 2 + 280), :]
+                cropped_image = cv2.resize(cropped_image.copy(), dsize=(0, 0), fx=2.7, fy=2.7, interpolation=cv2.INTER_CUBIC)
+
                 cv2.namedWindow('RealSense_front', cv2.WINDOW_NORMAL)
-                cv2.resizeWindow('RealSense_front', resized_image.shape[1], resized_image.shape[0])
-                cv2.imshow('RealSense_front', resized_image)
+                cv2.resizeWindow('RealSense_front', cropped_image.shape[1], cropped_image.shape[0])
+                cv2.imshow('RealSense_front', cropped_image)
 
                 key = cv2.waitKey(1)
 
