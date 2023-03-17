@@ -61,6 +61,8 @@ class RealSenseCamera:
         self.device = device
         self.device_type = device_type
 
+        self.current_timestamp = 0
+
         self.colored_depthmap = None
         self.color_image = None
         self.depth_image = None
@@ -169,6 +171,8 @@ class RealSenseCamera:
             self.jsonObj = json.load(open("./d455_0321.json"))
         elif self.device_type == 'd405':
             self.jsonObj = json.load(open("./d405_0321.json"))
+        elif self.device_type == 'd415':
+            self.jsonObj = json.load(open("./d415_0131.json"))
 
         self.pipeline = rs.pipeline()
         config = rs.config()
@@ -198,6 +202,7 @@ class RealSenseCamera:
     # def get_options(self):
     def get_data(self):
         self.frameset = self.pipeline.wait_for_frames()
+        self.current_timestamp = self.frameset.get_timestamp()
         self.frameset.keep()
         self.depth_frame = self.frameset.get_depth_frame()
         self.color_frame = self.frameset.get_color_frame()
