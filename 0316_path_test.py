@@ -9,6 +9,7 @@ import torch.backends.cudnn as cudnn
 import timeit
 import math
 import psutil
+import matplotlib.pyplot as plt
 from scipy.spatial.transform import Rotation as R
 from models.experimental import attempt_load
 from utils.augmentations import letterbox
@@ -96,7 +97,7 @@ def make_transformation_matrix(theta_0, theta_1):
     R_0 = homogeneous_rot('z', theta_0)
     R_1 = homogeneous_rot('z', theta_1)
     R_c = homogeneous_rot('x', -15)
-    R_co = np.array([[-1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]])
+    R_co = homogeneous_rot('z', 180) @ homogeneous_rot('x', 90)
     T_0 = homogeneous_trans(0, 323.5, 0)
     T_1 = homogeneous_trans(0, 333, 89.65)
     T_c = homogeneous_trans(20, 57.0688, -9.2615)
@@ -104,6 +105,53 @@ def make_transformation_matrix(theta_0, theta_1):
     transform_mat = R_0 @ T_0 @ R_1 @ T_1 @ T_c @ R_c @ R_co
 
     return transform_mat
+
+
+def drawing_coordinates(h_mat_cam, h_mat=np.eye(4)):
+    h_mat = h_mat @ homogeneous_rot('x', -90)
+    x = np.concatenate([h_mat[0:3, 3].reshape((1, 3)),
+                        h_mat[0:3, 3].reshape((1, 3)) + np.array([h_mat[0:3, 0] * 100]).reshape((1, 3))],
+                       axis=0)
+    y = np.concatenate([h_mat[0:3, 3].reshape((1, 3)),
+                        h_mat[0:3, 3].reshape((1, 3)) + np.array([h_mat[0:3, 1] * 100]).reshape((1, 3))],
+                       axis=0)
+    z = np.concatenate([h_mat[0:3, 3].reshape((1, 3)),
+                        h_mat[0:3, 3].reshape((1, 3)) + np.array([h_mat[0:3, 2] * 100]).reshape((1, 3))],
+                       axis=0)
+
+    x_c = np.concatenate([h_mat_cam[0:3, 3].reshape((1, 3)),
+                          h_mat_cam[0:3, 3].reshape((1, 3)) + np.array([h_mat_cam[0:3, 0] * 100]).reshape((1, 3))],
+                         axis=0)
+    y_c = np.concatenate([h_mat_cam[0:3, 3].reshape((1, 3)),
+                          h_mat_cam[0:3, 3].reshape((1, 3)) + np.array([h_mat_cam[0:3, 1] * 100]).reshape((1, 3))],
+                         axis=0)
+    z_c = np.concatenate([h_mat_cam[0:3, 3].reshape((1, 3)),
+                          h_mat_cam[0:3, 3].reshape((1, 3)) + np.array([h_mat_cam[0:3, 2] * 100]).reshape((1, 3))],
+                         axis=0)
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+
+    ax.invert_xaxis()
+    ax.invert_yaxis()
+    ax.invert_zaxis()
+
+    ax.plot3D([x[0, 0], x[1, 0]], [x[0, 1], x[1, 1]], [x[0, 2], x[1, 2]], 'red')
+    ax.plot3D([x_c[0, 0], x_c[1, 0]], [x_c[0, 1], x_c[1, 1]], [x_c[0, 2], x_c[1, 2]], 'red')
+    ax.plot3D([y[0, 0], y[1, 0]], [y[0, 1], y[1, 1]], [y[0, 2], y[1, 2]], 'green')
+    ax.plot3D([y_c[0, 0], y_c[1, 0]], [y_c[0, 1], y_c[1, 1]], [y_c[0, 2], y_c[1, 2]], 'green')
+    ax.plot3D([z[0, 0], z[1, 0]], [z[0, 1], z[1, 1]], [z[0, 2], z[1, 2]], 'blue')
+    ax.plot3D([z_c[0, 0], z_c[1, 0]], [z_c[0, 1], z_c[1, 1]], [z_c[0, 2], z_c[1, 2]], 'blue')
+
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    ax.set_zlabel('z')
+
+    ax.set_xlim3d([0, 1000])
+    ax.set_ylim3d([-500, 500])
+    ax.set_zlim3d([-1000, 0])
+
+    plt.show()
 
 
 def zoom(img: np.ndarray, scale, center=None):
