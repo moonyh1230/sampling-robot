@@ -96,10 +96,10 @@ def homogeneous_trans(tx, ty, tz):
 def make_transformation_matrix(theta_0, theta_1):
     R_0 = homogeneous_rot('z', theta_0)
     R_1 = homogeneous_rot('z', theta_1)
-    R_c = homogeneous_rot('x', -15)
+    R_c = homogeneous_rot('x', 20)
     R_co = homogeneous_rot('z', 180) @ homogeneous_rot('x', 90)
     T_0 = homogeneous_trans(0, 323.5, 0)
-    T_1 = homogeneous_trans(0, 333, 89.65)
+    T_1 = homogeneous_trans(0, 333, -89.65)
     T_c = homogeneous_trans(20, 57.0688, -9.2615)
 
     transform_mat = R_0 @ T_0 @ R_1 @ T_1 @ T_c @ R_c @ R_co
@@ -520,6 +520,12 @@ mp_face_mesh_0 = mp.solutions.face_mesh
 
 frame_height, frame_width, channels = (480, 640, 3)
 
+UDP_vision_ip = "169.254.84.185"
+UDP_main_ip = "169.254.84.181"
+
+UDP_vision_port = 61496
+UDP_main_port = 61480
+
 
 @torch.no_grad()
 def main():
@@ -529,7 +535,7 @@ def main():
 
     total_time = 0
 
-    min_cutoff = 0.0005
+    min_cutoff = 0.0001
     beta = 0.001
 
     weights_main = "ear_0829_x.pt"
@@ -537,8 +543,10 @@ def main():
     cameras = {}
     realsense_device = find_realsense()
 
+    udp_sender = Sender("udp_sender", UDP_main_ip, UDP_main_port)
+
     for serial, devices in realsense_device:
-        cameras[serial] = RealSenseCamera(device=devices, adv_mode_flag=True)
+        cameras[serial] = RealSenseCamera(device=devices, adv_mode_flag=True, device_type='d415')
 
     for ser, dev in cameras.items():
         rs_main = dev
@@ -618,7 +626,7 @@ def main():
                         resized_image = cv2.resize(img_raw, dsize=(0, 0), fx=1, fy=1,
                                                    interpolation=cv2.INTER_AREA)
 
-                        # resized_image = cv2.rotate(resized_image.copy(), cv2.ROTATE_90_COUNTERCLOCKWISE)
+                        resized_image = cv2.rotate(resized_image.copy(), cv2.ROTATE_90_COUNTERCLOCKWISE)
 
                         # Show images from both cameras
                         cv2.namedWindow('RealSense_front', cv2.WINDOW_NORMAL)
@@ -648,8 +656,12 @@ def main():
                     if len(face_points) == 1404:
                         x_reshaped = face_points.reshape(468, 3)
 
-                        nose_point = np.mean([x_reshaped[20], x_reshaped[60], x_reshaped[75],
-                                              x_reshaped[79], x_reshaped[166], x_reshaped[238]],
+                        # nose_point = np.mean([x_reshaped[20], x_reshaped[60], x_reshaped[75],
+                        #                       x_reshaped[79], x_reshaped[166], x_reshaped[238]],
+                        #                      axis=0)
+
+                        nose_point = np.mean([x_reshaped[250], x_reshaped[290], x_reshaped[305],
+                                              x_reshaped[309], x_reshaped[392], x_reshaped[458]],
                                              axis=0)
 
                         try:
@@ -668,7 +680,7 @@ def main():
                             continue
 
                         except AttributeError:
-                            print("None-type error")
+                            print("didn't detect ears")
                             continue
 
                         vec_no_9 = x_reshaped[9]
@@ -730,45 +742,47 @@ def main():
                         plane_norm_vec = np.cross((vec_no_200 - vec_no_4), (vec_no_9 - vec_no_4))
                         plane_norm_unit_vec = plane_norm_vec / np.linalg.norm(plane_norm_vec)
 
-                        if plane_norm_unit_vec[2] <= 0:
-                            img_disp = img_raw.copy()
+                        # if plane_norm_unit_vec[2] <= 0:
+                        #     img_disp = img_raw.copy()
+                        #
+                        # else:
+                        swab_vec = (vec_nose - vec_ear) / np.linalg.norm(vec_nose - vec_ear)
 
-                        else:
-                            swab_vec = (vec_nose - vec_ear) / np.linalg.norm(vec_nose - vec_ear)
+                        proj_norm_vec = np.dot(swab_vec, plane_norm_unit_vec) * plane_norm_unit_vec
+                        proj_vec = (swab_vec - proj_norm_vec) / np.linalg.norm(swab_vec - proj_norm_vec)
 
-                            proj_norm_vec = np.dot(swab_vec, plane_norm_unit_vec) * plane_norm_unit_vec
-                            proj_vec = (swab_vec - proj_norm_vec) / np.linalg.norm(swab_vec - proj_norm_vec)
+                        swab_visualize = vec_nose + proj_vec * 100
 
-                            swab_visualize = vec_nose + proj_vec * 100
+                        send_obj = np.append(vec_nose, -proj_vec)
 
-                            send_obj = np.append(vec_nose, -proj_vec)
+                        # print(send_obj)
 
-                            # print(send_obj)
+                        if mean_flag and send_obj.sum != 0:
+                            mean_temp = np.append(mean_temp, send_obj[np.newaxis, :], axis=0)
+                            # print(mean_temp[-1])
 
-                            if mean_flag and send_obj.sum != 0:
-                                mean_temp = np.append(mean_temp, send_obj[np.newaxis, :], axis=0)
-                                # print(mean_temp[-1])
+                            if len(mean_temp) > 100:
+                                mean_obj = np.mean(mean_temp, axis=0)[np.newaxis, :]
 
-                                if len(mean_temp) > 100:
-                                    mean_obj = np.mean(mean_temp, axis=0)[np.newaxis, :]
+                                trans_vec_temp = np.append(mean_obj[:, 0:3], np.array([[1]]))[np.newaxis, :]
+                                ang_vec_temp = np.append(mean_obj[:, 3:6], np.array([[0]]))[np.newaxis, :]
 
-                                    trans_vec_temp = np.append(mean_obj[:, 0:3], np.array([[1]]))[np.newaxis, :]
-                                    ang_vec_temp = np.append(mean_obj[:, 3:6], np.array([[0]]))[np.newaxis, :]
+                                trans_mat = make_transformation_matrix(-45.539, -58.496)
 
-                                    trans_mat = make_transformation_matrix(45, 45)
+                                trans_vec_rot = trans_mat @ trans_vec_temp.T
+                                ang_vec_rot = trans_mat @ ang_vec_temp.T
 
-                                    trans_vec_rot = trans_mat @ trans_vec_temp.T
-                                    ang_vec_rot = trans_mat @ ang_vec_temp.T
+                                udp_send_array = np.append(trans_vec_rot.T[0, 0:3], ang_vec_rot.T[0, 0:3])
+                                udp_send = struct.pack("ffffffff", 0, 2, udp_send_array[0], udp_send_array[1],
+                                                       udp_send_array[2], udp_send_array[3], udp_send_array[4],
+                                                       udp_send_array[5])
 
-                                    udp_send_array = np.append(trans_vec_rot.T[0, 0:3], ang_vec_rot.T[0, 0:3])
-                                    udp_send = struct.pack("ffffffff", 0, 2, udp_send_array[0], udp_send_array[1],
-                                                           udp_send_array[2], udp_send_array[3], udp_send_array[4],
-                                                           udp_send_array[5])
+                                udp_sender.send_messages(udp_send)
 
-                                    print(udp_send_array)
+                                print(udp_send_array)
 
-                                    mean_flag = False
-                                    mean_temp = np.zeros((0, 6))
+                                mean_flag = False
+                                mean_temp = np.zeros((0, 6))
 
                             swab_point_0 = rs.rs2_project_point_to_pixel(rs_main.color_intrinsics, vec_nose)
                             swab_point_1 = rs.rs2_project_point_to_pixel(rs_main.color_intrinsics, swab_visualize)
@@ -783,9 +797,6 @@ def main():
 
                         resized_image = cv2.resize(img_disp, dsize=(0, 0), fx=1, fy=1,
                                                    interpolation=cv2.INTER_AREA)
-
-                        resized_image = cv2.putText(resized_image.copy(), "path calculating...", (10, 60),
-                                                    cv2.FONT_HERSHEY_PLAIN, 0.7, (0, 0, 255), 2)
 
                 rearranged_face = face_points.reshape(468, 3)
                 face_center_current = np.average(rearranged_face, axis=0)
@@ -816,7 +827,7 @@ def main():
 
                 # Show images from both cameras
 
-                # resized_image = cv2.rotate(resized_image.copy(), cv2.ROTATE_90_COUNTERCLOCKWISE)
+                resized_image = cv2.rotate(resized_image.copy(), cv2.ROTATE_90_COUNTERCLOCKWISE)
 
                 cv2.namedWindow('RealSense_front', cv2.WINDOW_NORMAL)
                 cv2.resizeWindow('RealSense_front', resized_image.shape[1], resized_image.shape[0])
@@ -836,6 +847,7 @@ def main():
 
         finally:
             rs_main.stop()
+            udp_sender.close_sender_socket()
 
 
 if __name__ == '__main__':
