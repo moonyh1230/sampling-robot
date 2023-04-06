@@ -96,11 +96,19 @@ def homogeneous_trans(tx, ty, tz):
 def make_transformation_matrix(theta_0, theta_1):
     R_0 = homogeneous_rot('z', theta_0)
     R_1 = homogeneous_rot('z', theta_1)
+    # if robot arm layout rotated CCW, R_c rotate angle is positive.
+    # R_c = homogeneous_rot('x', -20)
     R_c = homogeneous_rot('x', 20)
-    R_co = homogeneous_rot('z', 180) @ homogeneous_rot('x', 90)
+    # if robot arm layout rotated CCW, R_co euler angle is zyx(0, 0, -90)
+    # R_co = homogeneous_rot('z', 180) @ homogeneous_rot('x', 90)
+    R_co = homogeneous_rot('x', -90)
     T_0 = homogeneous_trans(0, 323.5, 0)
+    # if robot arm layout rotated CCW, T_1 z value is negative.
+    # T_1 = homogeneous_trans(0, 333, 89.65)
     T_1 = homogeneous_trans(0, 333, -89.65)
-    T_c = homogeneous_trans(20, 57.0688, -9.2615)
+    # if robot arm layout rotated CCW, T_c x value is negative, z value is positive.
+    # T_c = homogeneous_trans(20, 65.6968, -8.5806)
+    T_c = homogeneous_trans(-20, 65.6968, 8.5806)
 
     transform_mat = R_0 @ T_0 @ R_1 @ T_1 @ T_c @ R_c @ R_co
 
