@@ -56,7 +56,8 @@ class RealSenseCamera:
                  depth_stream_width=848, depth_stream_height=480,
                  color_stream_width=640, color_stream_height=480,
                  depth_stream_fps=90, color_stream_fps=60,
-                 device=None, adv_mode_flag=False, device_type='d455'):
+                 device=None, adv_mode_flag=False, device_type='d455',
+                 mp_lock=None):
 
         self.device = device
         self.device_type = device_type
@@ -193,20 +194,9 @@ class RealSenseCamera:
 
         self.profile = self.pipeline.start(config)
 
-        if adv_mode_flag:
-            self.adv_mode()
+        self.sensor = self.device.query_sensors()
 
-    def __iter__(self):
-        return self.device.get_info(rs.camera_info.serial_number)
-
-    # def get_options(self):
-    def get_data(self):
-        self.frameset = self.pipeline.wait_for_frames()
-        self.current_timestamp = self.frameset.get_timestamp()
-        self.frameset.keep()
-        self.depth_frame = self.frameset.get_depth_frame()
-        self.color_frame = self.frameset.get_color_frame()
-        self.infrared_frame = self.frameset.first(rs.stream.infrared)
+        self.mp_lock = mp_lock
 
         # Get depth scale
         depth_sensor = self.profile.get_device().first_depth_sensor()
@@ -220,6 +210,33 @@ class RealSenseCamera:
              [0, 0, 1]],
             dtype=np.float64)
         self.dist_coeffs = np.array([self.color_intrinsics.coeffs], dtype=np.float64)
+
+        if adv_mode_flag:
+            self.adv_mode()
+
+    def __iter__(self):
+        return self.device.get_info(rs.camera_info.serial_number)
+
+    # def get_options(self):
+    def get_data(self):
+        if self.mp_lock is not None:
+            self.mp_lock.acquire()
+
+        frameset = self.pipeline.wait_for_frames()
+        try:
+            self.current_timestamp = frameset.get_timestamp()
+            # self.frameset.keep()
+            self.depth_frame = frameset.get_depth_frame()
+            self.color_frame = frameset.get_color_frame()
+            self.infrared_frame = frameset.first(rs.stream.infrared)
+
+            self.frameset = frameset
+
+        except RuntimeError as e:
+            print(str(self.device.get_info(rs.camera_info.serial_number)) + " camera can't polling frame")
+
+        if self.mp_lock is not None:
+            self.mp_lock.release()
 
     def get_aligned_frames(self, frameset, aligned_to_color=False, aligned_to_depth=False):
         if aligned_to_color:

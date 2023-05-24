@@ -104,11 +104,11 @@ def make_transformation_matrix(theta_0, theta_1):
     R_co = homogeneous_rot('x', -90)
     T_0 = homogeneous_trans(0, 323.5, 0)
     # if robot arm layout rotated CCW, T_1 z value is negative.
-    # T_1 = homogeneous_trans(0, 333, 89.65)
-    T_1 = homogeneous_trans(0, 333, -89.65)
+    # T_1 = homogeneous_trans(0, 358.5, 99.85)
+    T_1 = homogeneous_trans(0, 358.5, -99.85)
     # if robot arm layout rotated CCW, T_c x value is negative, z value is positive.
-    # T_c = homogeneous_trans(20, 65.6968, -8.5806)
-    T_c = homogeneous_trans(-20, 65.6968, 8.5806)
+    # T_c = homogeneous_trans(35, 70.6968, -8.5806)
+    T_c = homogeneous_trans(-35, 70.6968, 8.5806)
 
     transform_mat = R_0 @ T_0 @ R_1 @ T_1 @ T_c @ R_c @ R_co
 
@@ -209,8 +209,8 @@ def zoom(img: np.ndarray, scale, center=None):
 
 
 class InitializeYOLO:
-    def __init__(self, weights_path, img_size=640, conf_threshold=0.25,
-                 iou_threshold=0.35, max_det=1, classes=None, agnostic_nms=False,
+    def __init__(self, weights_path, img_size=640, conf_threshold=0.05,
+                 iou_threshold=0.15, max_det=1, classes=None, agnostic_nms=False,
                  augment=False, half=False, device_num='', line_thickness=3):
         self.weights = weights_path
         self.imgsz = img_size
@@ -546,7 +546,7 @@ def main():
     min_cutoff = 0.0001
     beta = 0.001
 
-    weights_main = "ear_0829_x.pt"
+    weights_main = "ear_0413.pt"
 
     cameras = {}
     realsense_device = find_realsense()
