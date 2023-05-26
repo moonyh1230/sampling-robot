@@ -209,7 +209,7 @@ def zoom(img: np.ndarray, scale, center=None):
 
 
 class InitializeYOLO:
-    def __init__(self, weights_path, img_size=640, conf_threshold=0.05,
+    def __init__(self, weights_path, img_size: list, conf_threshold=0.05,
                  iou_threshold=0.15, max_det=1, classes=None, agnostic_nms=False,
                  augment=False, half=False, device_num='', line_thickness=3):
         self.weights = weights_path
@@ -237,7 +237,7 @@ class InitializeYOLO:
 
         if self.device_type.type != 'cpu':
             self.model(
-                torch.zeros(1, 3, self.imgsz, self.imgsz).to(self.device_type).type_as(next(self.model.parameters())))
+                torch.zeros(1, 3, self.imgsz[0], self.imgsz[1]).to(self.device_type).type_as(next(self.model.parameters())))
 
     def detect_from_img(self, img_0, realsense_device: RealSenseCamera):
         return_pos = None
@@ -250,6 +250,7 @@ class InitializeYOLO:
 
         # Letterbox
         img_raw = img_0.copy()
+        img_0 = letterbox(img_raw, self.imgsz, stride=self.stride, auto=True)[0]
         img_0 = img_0[np.newaxis, :, :, :]
 
         # Stack
@@ -526,7 +527,7 @@ class LandmarkMaker(Thread):
 mp_drawing = mp.solutions.drawing_utils
 mp_face_mesh_0 = mp.solutions.face_mesh
 
-frame_height, frame_width, channels = (480, 640, 3)
+frame_height, frame_width, channels = (720, 1280, 3)
 
 UDP_vision_ip = "169.254.84.185"
 UDP_main_ip = "169.254.84.181"
@@ -546,7 +547,7 @@ def main():
     min_cutoff = 0.0001
     beta = 0.001
 
-    weights_main = "ear_0413.pt"
+    weights_main = "ear_0526s.pt"
 
     cameras = {}
     realsense_device = find_realsense()
@@ -554,7 +555,11 @@ def main():
     udp_sender = Sender("udp_sender", UDP_main_ip, UDP_main_port)
 
     for serial, devices in realsense_device:
-        cameras[serial] = RealSenseCamera(device=devices, adv_mode_flag=True, device_type='d415')
+        cameras[serial] = RealSenseCamera(device=devices, adv_mode_flag=True, device_type='d415',
+                                          color_stream_height=frame_height, color_stream_width=frame_width,
+                                          color_stream_fps=30,
+                                          depth_stream_height=frame_height, depth_stream_width=frame_width,
+                                          depth_stream_fps=30)
 
     for ser, dev in cameras.items():
         rs_main = dev
@@ -567,7 +572,7 @@ def main():
     mean_temp = np.zeros((0, 6))
     mean_flag = False
 
-    yolo_main = InitializeYOLO(weights_path=weights_main)
+    yolo_main = InitializeYOLO(img_size=[frame_height, frame_width], weights_path=weights_main)
 
     face_center_prev = None
     flag_path_calc = False
