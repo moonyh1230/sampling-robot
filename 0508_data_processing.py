@@ -1,6 +1,8 @@
+import os
 import queue
 import struct
 import time
+from datetime import datetime
 
 import cv2
 import numpy as np
@@ -42,6 +44,55 @@ def convert_depth_to_phys_coord(xp, yp, depth, intr):
     result = rs.rs2_deproject_pixel_to_point(intr, [int(xp), int(yp)], depth)
 
     return result[0], result[1], result[2]
+
+
+def homogeneous_rot(axis, angle):
+    mat = np.zeros((4, 4))
+    mat[3, 3] = 1
+    rot = R.from_euler(axis, angle, degrees=True).as_matrix()
+    mat[0:3, 0:3] = rot
+    return mat
+
+
+def homogeneous_trans(tx, ty, tz):
+    mat = np.eye(4)
+    mat[0, 3] = tx
+    mat[1, 3] = ty
+    mat[2, 3] = tz
+    return mat
+
+
+def make_transformation_matrix(theta_0, theta_1):
+    R_0 = homogeneous_rot('z', theta_0)
+    R_1 = homogeneous_rot('z', theta_1)
+    # if robot arm layout rotated CCW, R_c rotate angle is positive.
+    # R_c = homogeneous_rot('x', -20)
+    R_c = homogeneous_rot('x', 20)
+    # if robot arm layout rotated CCW, R_co euler angle is zyx(0, 0, -90)
+    # R_co = homogeneous_rot('z', 180) @ homogeneous_rot('x', 90)
+    R_co = homogeneous_rot('x', -90)
+    T_0 = homogeneous_trans(0, 323.5, 0)
+    # if robot arm layout rotated CCW, T_1 z value is negative.
+    # T_1 = homogeneous_trans(0, 358.5, 99.85)
+    T_1 = homogeneous_trans(0, 358.5, -99.85)
+    # if robot arm layout rotated CCW, T_c x value is negative, z value is positive.
+    # T_c = homogeneous_trans(35, 70.6968, -8.5806)
+    T_c = homogeneous_trans(-35, 70.6968, 8.5806)
+
+    transform_mat = R_0 @ T_0 @ R_1 @ T_1 @ T_c @ R_c @ R_co
+
+    return transform_mat
+
+
+def camera_transformation(x, y, z, rot_x, rot_y, rot_z):
+    r_x = homogeneous_rot('x', rot_x)
+    r_y = homogeneous_rot('y', rot_y)
+    r_z = homogeneous_rot('z', rot_z)
+    t = homogeneous_trans(x, y, z)
+
+    transform_matrix = t @ r_x @ r_y @ r_z
+
+    return transform_matrix
 
 
 class InitializeYOLO:
@@ -133,6 +184,7 @@ class EarPositionCheck(Process):
     def run(self):
         device = None
         cameras = {}
+        transform_matrix = None
         weights_earhole = "earhole_0508s.pt"
 
         model = InitializeYOLO(weights_path=weights_earhole)
@@ -146,6 +198,8 @@ class EarPositionCheck(Process):
 
                     _, device = cameras.popitem()
 
+            transform_matrix = camera_transformation(406.65, -230, 699.65, 0, -90, 0)
+
         elif self.name == "rs_right":
             for serial, devices in realsense_device:
                 if serial == "117122250913":
@@ -153,6 +207,8 @@ class EarPositionCheck(Process):
                                                       mp_lock=self.lock, color_stream_fps=30, depth_stream_fps=30)
 
                     _, device = cameras.popitem()
+
+            transform_matrix = camera_transformation(-406.65, -230, 699.65, 0, 90, 0)
 
         else:
             print("cannot find required camera")
@@ -200,7 +256,7 @@ class EarPositionCheck(Process):
                             text = str(earhole[2] * 1000)
                             img_raw = cv2.putText(img_raw.copy(), text, (10, 30), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 0), 2)
 
-                            queued = [earhole * 1000, timestamp]
+                            queued = [transform_matrix @ (earhole * 1000), timestamp, frameset]
                             self.res_queue.put(queued)
                             self.res_queue.join()
 
@@ -314,6 +370,11 @@ def main():
     right_res_task = JoinableQueue(maxsize=1)
     rs_main = None
 
+    collect_flag = False
+    dataset = np.zeros((0, 1410))
+    color_frame = np.zeros((0, 3))
+    depth_frame = np.zeros((0, 3))
+
     lock = Lock()
 
     timestamps = np.zeros((0, 3))
@@ -382,6 +443,7 @@ def main():
 
                 img_rs0 = np.copy(rs_main.color_image)
                 img_raw = np.copy(img_rs0)
+                img_depth = np.copy(np.asanyarray(rs_main.depth_frame.get_data()))
 
                 resized_image = cv2.resize(img_raw, dsize=(0, 0), fx=1, fy=1, interpolation=cv2.INTER_AREA)
 
@@ -457,6 +519,18 @@ def main():
                 timestamp_iter = np.array([main_timestamp, left_data[1], right_data[1]])
                 timestamps = np.append(timestamps, timestamp_iter[np.newaxis, :], axis=0)
 
+                if collect_flag:
+                    dataset_iter = np.concatenate((face_points, left_data[0], right_data[0]), axis=1)
+                    dataset = np.append(dataset, dataset_iter[np.newaxis, :], axis=0)
+                    color_iter = np.array([img_raw.copy(),
+                                           frame_to_np_array(left_data[2].get_color_frame()).copy(),
+                                           frame_to_np_array(right_data[2].get_color_frame()).copy()])
+                    color_frame = np.append(color_frame, color_iter[np.newaxis, :], axis=0)
+                    depth_iter = np.array([img_depth,
+                                           np.copy(np.asanyarray(left_data[2].get_depth_frame().get_data())),
+                                           np.copy(np.asanyarray(right_data[2].get_depth_frame().get_data()))])
+                    depth_frame = np.append(depth_frame, depth_iter[np.newaxis, :], axis=0)
+
                 cv2.namedWindow('RealSense_front', cv2.WINDOW_NORMAL)
                 cv2.resizeWindow('RealSense_front', resized_image.shape[1], resized_image.shape[0])
                 cv2.imshow('RealSense_front', resized_image)
@@ -472,6 +546,26 @@ def main():
 
                     cv2.destroyAllWindows()
                     break
+                elif key & 0xFF == ord('s'):
+                    if not collect_flag:
+                        collect_flag = True
+                    else:
+                        collect_flag = False
+                        present_time = datetime.now()
+                        save_path = ("./{}{}{}{}/".format(present_time.month, present_time.day, present_time.hour,
+                                                          present_time.minute))
+                        color_path = save_path + 'color_img/'
+                        depth_path = save_path + 'depth_img/'
+                        path_list = [save_path, color_path, depth_path]
+                        os.makedirs(path_list, exist_ok=True)
+                        np.savetxt(save_path + "dataset.csv", dataset, fmt='%1.5f')
+                        for i in range(dataset.shape[1]):
+                            cv2.imwrite(color_path + '{}_main.png'.format(i), color_frame[i, 0])
+                            cv2.imwrite(color_path + '{}_left.png'.format(i), color_frame[i, 1])
+                            cv2.imwrite(color_path + '{}_right.png'.format(i), color_frame[i, 2])
+                            np.savetxt(depth_path + '{}_main.csv'.format(i), depth_frame[i, 0])
+                            np.savetxt(depth_path + '{}_left.csv'.format(i), depth_frame[i, 1])
+                            np.savetxt(depth_path + '{}_right.csv'.format(i), depth_frame[i, 2])
 
             except RuntimeError:
                 print("frame skipped")
