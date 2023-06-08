@@ -9,11 +9,14 @@ from RealSense_Utilities.realsense_api.realsense_api import RealSenseCamera
 from RealSense_Utilities.realsense_api.realsense_api import find_realsense
 from RealSense_Utilities.realsense_api.realsense_api import frame_to_np_array
 
-ARUCO_PARAMETERS = aruco.DetectorParameters_create()
-ARUCO_DICT = aruco.Dictionary_get(aruco.DICT_4X4_50)
+ARUCO_PARAMETERS = aruco.DetectorParameters()
+CHARUCO_PARAMETERS = aruco.CharucoParameters()
+REFINE_PARAMETERS = aruco.RefineParameters()
+ARUCO_DICT = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
+detector = aruco.ArucoDetector(ARUCO_DICT, ARUCO_PARAMETERS, REFINE_PARAMETERS)
 
-squareLength = 0.030
-markerLength = 0.020
+squareLength = 0.025
+markerLength = 0.0167
 
 name = "transform.npz"
 
@@ -24,7 +27,7 @@ def convert_depth_to_phys_coord(xp, yp, depth, intr):
     return result[0], result[1], result[2]
 
 
-frame_height, frame_width, channels = (480, 640, 3)
+frame_height, frame_width, channels = (720, 1280, 3)
 
 
 def run():
@@ -32,8 +35,11 @@ def run():
     realsense_device = find_realsense()
 
     for serial, devices in realsense_device:
-        if serial == '105322250965':
-            cameras[serial] = RealSenseCamera(device=devices, adv_mode_flag=True)
+        if serial == '135222252454':
+            cameras[serial] = RealSenseCamera(device=devices, adv_mode_flag=True,
+                                              color_stream_width=frame_width, color_stream_height=frame_height,
+                                              depth_stream_width=frame_width, depth_stream_height=frame_height,
+                                              color_stream_fps=30, depth_stream_fps=30)
 
     ser, device = cameras.popitem()
 
@@ -71,12 +77,12 @@ def run():
                                                                     squareLength,
                                                                     device.camera_matrix,
                                                                     device.dist_coeffs)
-                    img_draw_dia = aruco.drawAxis(img_draw_dia,
-                                                  device.camera_matrix,
-                                                  device.dist_coeffs,
-                                                  rvec,
-                                                  tvec,
-                                                  0.05)
+                    img_draw_dia = cv2.drawFrameAxes(img_draw_dia,
+                                                     device.camera_matrix,
+                                                     device.dist_coeffs,
+                                                     rvec,
+                                                     tvec,
+                                                     0.05)
 
                     tvec = tvec[0][0]
 
